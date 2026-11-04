@@ -59,7 +59,17 @@ final class AppModel {
     var splitIssues: [Issue] = []
     var dismissedIssueKeys: Set<String> = []
     var dirtyFiles: Set<URL> = []
-    var settings: ScanSettings { didSet { saveSettings() } }
+    var settings: ScanSettings {
+        didSet {
+            saveSettings()
+            // Integrity checks are cheap: re-run immediately when their settings change (even with the sidebar closed).
+            let o = oldValue, n = settings
+            if o.fps != n.fps || o.disabledIssueKinds != n.disabledIssueKinds || o.overlapSameRoleOnly != n.overlapSameRoleOnly
+                || o.roleTolerance != n.roleTolerance || o.roleScope != n.roleScope {
+                runIntegrity()
+            }
+        }
+    }
     var settingsAtScan: ScanSettings?
     var lastScan: Date?
 
@@ -69,7 +79,6 @@ final class AppModel {
     var sidebarSelection: UUID?
     var sidebarFilter: SidebarFilter = .all
     var editingRow: RowRef?
-    var hiddenKinds: Set<IssueKind> = []
     var showMarkerExport = false
     var markerOptions: MarkerOptions {
         didSet { if let d = try? JSONEncoder().encode(markerOptions) { UserDefaults.standard.set(d, forKey: "markerOptions") } }
@@ -102,7 +111,9 @@ final class AppModel {
 
     var selectedSheet: TakeSheet? { sheets.first { $0.id == selectedSheetID } }
     var isDirty: Bool { !dirtyFiles.isEmpty }
-    var issues: [Issue] { (integrityIssues + splitIssues).filter { !dismissedIssueKeys.contains($0.key) } }
+    var issues: [Issue] {
+        (integrityIssues + splitIssues).filter { !dismissedIssueKeys.contains($0.key) && settings.isEnabled($0.kind) }
+    }
     var acceptedCount: Int { proposals.filter(\.accepted).count }
     var settingsChangedSinceScan: Bool { settingsAtScan != nil && settingsAtScan != settings }
 
@@ -113,7 +124,7 @@ final class AppModel {
     }
 
     func visibleIssues() -> [Issue] {
-        let all = issues.filter { !hiddenKinds.contains($0.kind) }
+        let all = issues
         guard sidebarFilter == .current, let sel = selectedSheetID else { return all }
         return all.filter { $0.refs.contains { $0.sheetID == sel } }
     }

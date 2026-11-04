@@ -43,17 +43,34 @@ public struct ScanSettings: Codable, Equatable {
     public var gapFrames = 0
     public var takeNumberMode = TakeNumberMode.suffix
 
-    public var checkMissingRole = true
-    public var checkMissingTimecode = true
-    public var checkOverlap = true
+    /// Warning types that are not checked at all.
+    public var disabledIssueKinds: Set<IssueKind> = []
     public var overlapSameRoleOnly = false
-    public var checkRoleSpelling = true
     public var roleTolerance = 1
     public var roleScope = RoleScope.file
-    public var checkUmlauts = true
-    public var checkSpecialCharacters = true
 
     public init() {}
+
+    public func isEnabled(_ kind: IssueKind) -> Bool { !disabledIssueKinds.contains(kind) }
+
+    /// Group toggles used by the settings sidebar; on if any kind of the group is checked.
+    public func groupEnabled(_ kinds: [IssueKind]) -> Bool { kinds.contains { isEnabled($0) } }
+    public mutating func setGroup(_ kinds: [IssueKind], _ on: Bool) {
+        if on { disabledIssueKinds.subtract(kinds) } else { disabledIssueKinds.formUnion(kinds) }
+    }
+
+    public var checkMissingRole: Bool { get { groupEnabled([.missingRole]) } set { setGroup([.missingRole], newValue) } }
+    public var checkMissingTimecode: Bool {
+        get { groupEnabled([.missingTimecode, .invalidTimecode, .reversedTimecode]) }
+        set { setGroup([.missingTimecode, .invalidTimecode, .reversedTimecode], newValue) }
+    }
+    public var checkOverlap: Bool { get { groupEnabled([.overlap]) } set { setGroup([.overlap], newValue) } }
+    public var checkRoleSpelling: Bool { get { groupEnabled([.roleSpelling]) } set { setGroup([.roleSpelling], newValue) } }
+    public var checkUmlauts: Bool { get { groupEnabled([.umlauts]) } set { setGroup([.umlauts], newValue) } }
+    public var checkSpecialCharacters: Bool {
+        get { groupEnabled([.specialCharacters, .encodingDamage]) }
+        set { setGroup([.specialCharacters, .encodingDamage], newValue) }
+    }
 
     public init(from decoder: Decoder) throws {
         // Tolerant decoding so new settings never discard stored ones.
@@ -69,15 +86,10 @@ public struct ScanSettings: Codable, Equatable {
         weighting = (try? c.decode(TimeWeighting.self, forKey: .weighting)) ?? d.weighting
         gapFrames = (try? c.decode(Int.self, forKey: .gapFrames)) ?? d.gapFrames
         takeNumberMode = (try? c.decode(TakeNumberMode.self, forKey: .takeNumberMode)) ?? d.takeNumberMode
-        checkMissingRole = (try? c.decode(Bool.self, forKey: .checkMissingRole)) ?? d.checkMissingRole
-        checkMissingTimecode = (try? c.decode(Bool.self, forKey: .checkMissingTimecode)) ?? d.checkMissingTimecode
-        checkOverlap = (try? c.decode(Bool.self, forKey: .checkOverlap)) ?? d.checkOverlap
         overlapSameRoleOnly = (try? c.decode(Bool.self, forKey: .overlapSameRoleOnly)) ?? d.overlapSameRoleOnly
-        checkRoleSpelling = (try? c.decode(Bool.self, forKey: .checkRoleSpelling)) ?? d.checkRoleSpelling
         roleTolerance = (try? c.decode(Int.self, forKey: .roleTolerance)) ?? d.roleTolerance
         roleScope = (try? c.decode(RoleScope.self, forKey: .roleScope)) ?? d.roleScope
-        checkUmlauts = (try? c.decode(Bool.self, forKey: .checkUmlauts)) ?? d.checkUmlauts
-        checkSpecialCharacters = (try? c.decode(Bool.self, forKey: .checkSpecialCharacters)) ?? d.checkSpecialCharacters
+        disabledIssueKinds = (try? c.decode(Set<IssueKind>.self, forKey: .disabledIssueKinds)) ?? d.disabledIssueKinds
     }
 }
 
@@ -107,7 +119,7 @@ public struct RowRef: Hashable {
     public init(sheetID: UUID, rowID: UUID) { self.sheetID = sheetID; self.rowID = rowID }
 }
 
-public enum IssueKind: String, CaseIterable, Identifiable {
+public enum IssueKind: String, CaseIterable, Identifiable, Codable {
     case missingRole, missingTimecode, invalidTimecode, reversedTimecode, overlap, roleSpelling, cannotSplit
     case encodingDamage, specialCharacters, umlauts
     public var id: String { rawValue }
@@ -253,7 +265,7 @@ public enum Scanner {
                                            parts: parts, reason: reasons.joined(separator: " · "), notes: notes))
             }
         }
-        return (props, issues)
+        return (props, settings.isEnabled(.cannotSplit) ? issues : [])
     }
 
     static func suffix(_ n: Int) -> String {
@@ -358,24 +370,24 @@ public enum Scanner {
                 let ref = [RowRef(sheetID: sheet.id, rowID: row.id)]
                 let label = "Zeile \(row.label)"
                 let role = row.text(m.role)
-                if settings.checkMissingRole, role.isEmpty {
+                if settings.isEnabled(.missingRole), role.isEmpty {
                     issues.append(Issue(kind: .missingRole, message: "\(label): Take ist keiner Rolle zugeordnet.", refs: ref, key: "role-\(row.id)"))
                 }
                 let info = takeInfo(row, m, tc)
-                if settings.checkMissingTimecode {
+                do {
                     var missing: [String] = []
                     if info.inF == nil, !info.inInvalid { missing.append("TC In") }
                     if info.outF == nil, !info.outInvalid { missing.append("TC Out") }
-                    if !missing.isEmpty {
+                    if settings.isEnabled(.missingTimecode), !missing.isEmpty {
                         issues.append(Issue(kind: .missingTimecode, message: "\(label): \(missing.joined(separator: " und ")) fehlt.", refs: ref, key: "tcmiss-\(row.id)"))
                     }
                     var invalid: [String] = []
                     if info.inInvalid { invalid.append("TC In „\(row.text(m.tcIn))“") }
                     if info.outInvalid, !m.combinedTimecode { invalid.append("TC Out „\(row.text(m.tcOut))“") }
-                    if !invalid.isEmpty {
+                    if settings.isEnabled(.invalidTimecode), !invalid.isEmpty {
                         issues.append(Issue(kind: .invalidTimecode, message: "\(label): \(invalid.joined(separator: ", ")) nicht lesbar (\(settings.fps) fps).", refs: ref, key: "tcinv-\(row.id)"))
                     }
-                    if let a = info.inF, let b = info.outF, b <= a {
+                    if settings.isEnabled(.reversedTimecode), let a = info.inF, let b = info.outF, b <= a {
                         issues.append(Issue(kind: .reversedTimecode, message: "\(label): TC Out liegt nicht nach TC In.", refs: ref, key: "tcrev-\(row.id)"))
                     }
                 }
@@ -423,12 +435,12 @@ public enum Scanner {
         for (col, name) in textColumns(sheet.mapping) {
             let f = CharacterCheck.analyze(row.cell(col).text)
             var bits: [String] = []
-            if f.damaged { damaged = true; bits.append("vermutlich falsch kodiert") }
-            if settings.checkSpecialCharacters, !f.special.isEmpty {
+            if f.damaged, settings.isEnabled(.encodingDamage) { damaged = true; bits.append("vermutlich falsch kodiert") }
+            if settings.isEnabled(.specialCharacters), !f.special.isEmpty {
                 special = true
                 bits.append("Sonderzeichen " + f.special.prefix(8).map(CharacterCheck.describe).joined(separator: ", "))
             }
-            if settings.checkUmlauts, !f.umlauts.isEmpty {
+            if settings.isEnabled(.umlauts), !f.umlauts.isEmpty {
                 umlaut = true
                 bits.append("Umlaute " + f.umlauts.map { String($0) }.joined(separator: " "))
             }

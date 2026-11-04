@@ -20,20 +20,7 @@ struct ChangesSidebar: View {
 
             HStack {
                 Spacer()
-                Menu {
-                    ForEach(IssueKind.allCases) { kind in
-                        Toggle(kind.title, isOn: Binding(get: { !model.hiddenKinds.contains(kind) },
-                                                         set: { on in if on { model.hiddenKinds.remove(kind) } else { model.hiddenKinds.insert(kind) } }))
-                    }
-                    Divider()
-                    Button("Alle Typen zeigen") { model.hiddenKinds.removeAll() }
-                } label: {
-                    Label(model.hiddenKinds.isEmpty ? "Warnungstypen" : "Warnungstypen (\(model.hiddenKinds.count) ausgeblendet)",
-                          systemImage: "line.3.horizontal.decrease.circle")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .font(.caption)
+                WarningTypesButton()
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 4)
@@ -207,6 +194,46 @@ struct IssueRow: View {
         .padding(.vertical, 3)
         .contextMenu {
             Button("Warnung ausblenden") { model.dismiss(issue) }
+        }
+    }
+}
+
+/// Popover with checkboxes that stays open while several warning types are toggled.
+/// Disabled types are not checked at all – no sidebar entries, no ⚠︎ marks in the tables.
+struct WarningTypesButton: View {
+    @Environment(AppModel.self) private var model
+    @State private var open = false
+
+    var body: some View {
+        let disabled = model.settings.disabledIssueKinds.count
+        Button {
+            open.toggle()
+        } label: {
+            Label(disabled == 0 ? "Warnungstypen" : "Warnungstypen (\(disabled) aus)", systemImage: "line.3.horizontal.decrease.circle")
+        }
+        .buttonStyle(.borderless)
+        .font(.caption)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Geprüfte Warnungstypen").font(.headline)
+                ForEach(IssueKind.allCases) { kind in
+                    Toggle(isOn: Binding(get: { model.settings.isEnabled(kind) },
+                                         set: { model.settings.setGroup([kind], $0) })) {
+                        Label(kind.title, systemImage: kind.symbol)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                Divider()
+                HStack {
+                    Button("Alle an") { model.settings.disabledIssueKinds.removeAll() }
+                    Button("Alle aus") { model.settings.disabledIssueKinds = Set(IssueKind.allCases) }
+                }
+                .controlSize(.small)
+                Text("Abgewählte Typen werden gar nicht mehr geprüft.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(14)
+            .frame(width: 260)
         }
     }
 }

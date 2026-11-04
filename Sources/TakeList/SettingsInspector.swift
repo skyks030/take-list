@@ -106,7 +106,6 @@ struct SettingsInspector: View {
                 }
             }
             .formStyle(.grouped)
-            .onChange(of: integrityKey) { _, _ in model.runIntegrity() }
 
             Divider()
             VStack(spacing: 6) {
@@ -131,12 +130,5 @@ struct SettingsInspector: View {
             }
             .padding(12)
         }
-    }
-
-    /// Integrity checks are cheap – re-run them live when their settings change.
-    private var integrityKey: [String] {
-        let s = model.settings
-        return ["\(s.fps)", "\(s.checkMissingRole)", "\(s.checkMissingTimecode)", "\(s.checkOverlap)", "\(s.overlapSameRoleOnly)",
-                "\(s.checkRoleSpelling)", "\(s.roleTolerance)", s.roleScope.rawValue, "\(s.checkUmlauts)", "\(s.checkSpecialCharacters)"]
     }
 }
