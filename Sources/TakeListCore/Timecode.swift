@@ -41,7 +41,8 @@ public struct Timecode {
 
     public func parse(_ cell: Cell) -> (frames: Int, style: TimecodeStyle)? {
         switch cell.value {
-        case .number(let d) where d >= 0 && d < 10:
+        // Excel time value (fraction of a day). Whole numbers ≥ 1 are IDs/counters, not times.
+        case .number(let d) where d >= 0 && d < 10 && (d < 1 || d.rounded() != d):
             return (Int((d * 86_400 * Double(fps)).rounded()), .excel)
         case .string(let s):
             return parse(s)

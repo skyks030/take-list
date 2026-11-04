@@ -45,12 +45,14 @@ public enum ColumnDetector {
         return bestRow
     }
 
-    public static func detect(rows: [SheetRow], headerRow: Int, fps: Int) -> ColumnMapping {
-        let count = rows.map(\.cells.count).max() ?? 0
+    public static func detect(rows: [SheetRow], headerRow: Int, fps: Int, hidden: [ClosedRange<Int>] = []) -> ColumnMapping {
+        let usedCols = Set(SheetColumns.used(rows, hidden: hidden))
+        let count = (usedCols.max() ?? -1) + 1
         let header = rows.indices.contains(headerRow) ? rows[headerRow] : SheetRow(cells: [])
         let headers = (0..<count).map { header.text($0) }
         let sample = Array(rows.dropFirst(headerRow + 1).prefix(200))
-        var used = Set<Int>()
+        // Empty/hidden columns can never be picked.
+        var used = Set((0..<count).filter { !usedCols.contains($0) })
         var m = ColumnMapping()
 
         func pick(_ keys: [(String, Int)]) -> Int? {

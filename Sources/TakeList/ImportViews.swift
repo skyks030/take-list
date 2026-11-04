@@ -26,7 +26,10 @@ struct SheetPickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Tabellenblätter importieren").font(.title2.weight(.semibold))
-            Text(file.url.lastPathComponent).foregroundStyle(.secondary)
+            Text("\(file.url.lastPathComponent) – \(file.workbook.sheets.count) Blatt\(file.workbook.sheets.count == 1 ? "" : "blätter")")
+                .foregroundStyle(.secondary)
+            Text("Jedes ausgewählte Blatt wird ein eigener Reiter. Weitere Blätter derselben Datei kannst du später über „+“ nachladen.")
+                .font(.caption).foregroundStyle(.tertiary)
             List {
                 ForEach(file.workbook.sheets) { info in
                     let imported = model.isImported(file.url, info.path)
@@ -34,7 +37,12 @@ struct SheetPickerView: View {
                                          set: { on in if on { file.selection.insert(info.path) } else { file.selection.remove(info.path) } })) {
                         HStack {
                             Text(info.name)
-                            if imported { Text("bereits geöffnet").font(.caption).foregroundStyle(.secondary) }
+                            Spacer()
+                            if imported { Text("bereits geöffnet").font(.caption).foregroundStyle(.orange) }
+                            if let st = file.stats[info.path] {
+                                Text(st.rows == 0 ? "leer" : "\(st.rows) Zeilen · \(st.columns) Spalten")
+                                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -52,7 +60,7 @@ struct SheetPickerView: View {
             }
         }
         .padding(20)
-        .frame(width: 440, height: 400)
+        .frame(width: 520, height: 440)
     }
 }
 
@@ -60,7 +68,12 @@ struct MappingView: View {
     @Environment(AppModel.self) private var model
     @State var pending: PendingSheet
 
-    private var columnCount: Int { pending.rows.map(\.cells.count).max() ?? 0 }
+    /// Only columns with content (formatted-but-empty and hidden columns are skipped), plus mapped ones.
+    private var columns: [Int] {
+        let m = pending.mapping
+        let mapped = [m.tcIn, m.tcOut, m.role, m.text, m.takeNumber].compactMap { $0 }
+        return Array(Set(SheetColumns.used(pending.rows, hidden: pending.hiddenColumns)).union(mapped)).sorted()
+    }
 
     private func header(_ c: Int) -> String {
         let t = pending.rows.indices.contains(pending.headerRow) ? pending.rows[pending.headerRow].text(c) : ""
@@ -83,7 +96,8 @@ struct MappingView: View {
                     Text("Überschriftenzeile")
                     Stepper(value: Binding(get: { pending.headerRow + 1 }, set: { v in
                         pending.headerRow = max(0, min(v - 1, max(0, pending.rows.count - 1)))
-                        pending.mapping = ColumnDetector.detect(rows: pending.rows, headerRow: pending.headerRow, fps: model.settings.fps)
+                        pending.mapping = ColumnDetector.detect(rows: pending.rows, headerRow: pending.headerRow, fps: model.settings.fps,
+                                                                hidden: pending.hiddenColumns)
                     }), in: 1...max(1, min(50, pending.rows.count))) {
                         Text("Zeile \(pending.headerRow + 1)").monospacedDigit()
                     }
@@ -136,7 +150,7 @@ struct MappingView: View {
             }
             Picker("", selection: binding) {
                 Text("—").tag(Int?.none)
-                ForEach(0..<columnCount, id: \.self) { c in
+                ForEach(columns, id: \.self) { c in
                     Text("\(columnLetters(c)) · \(header(c))").tag(Int?.some(c))
                 }
             }
@@ -147,7 +161,7 @@ struct MappingView: View {
 
     private var preview: some View {
         let dataRows = Array(pending.rows.dropFirst(pending.headerRow + 1).filter { !$0.cells.allSatisfy { $0.value.isBlank } }.prefix(8))
-        let cols = Array(0..<columnCount)
+        let cols = columns
         return ScrollView([.horizontal, .vertical]) {
             Grid(alignment: .topLeading, horizontalSpacing: 1, verticalSpacing: 1) {
                 GridRow {
@@ -200,7 +214,7 @@ struct EditRowView: View {
             if let sheet {
                 ScrollView {
                     Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 8) {
-                        ForEach(0..<sheet.columnCount, id: \.self) { c in
+                        ForEach(sheet.displayColumns, id: \.self) { c in
                             GridRow {
                                 VStack(alignment: .leading, spacing: 0) {
                                     Text(sheet.headers[c]).lineLimit(1)
@@ -245,7 +259,7 @@ struct EditRowView: View {
         .onAppear {
             guard let sheet, let row else { return }
             let tc = Timecode(fps: model.settings.fps)
-            for c in 0..<sheet.columnCount {
+            for c in sheet.displayColumns {
                 let cell = row.cell(c)
                 if (c == sheet.mapping.tcIn || c == sheet.mapping.tcOut), !sheet.mapping.combinedTimecode,
                    case .number = cell.value, let p = tc.parse(cell) {

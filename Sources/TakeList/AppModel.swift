@@ -10,6 +10,8 @@ struct PendingFile: Identifiable {
     let workbook: Workbook
     let data: Data
     var selection: Set<String>
+    /// Filled rows and used columns per sheet path, for the sheet picker.
+    var stats: [String: (rows: Int, columns: Int)] = [:]
 }
 
 struct PendingSheet: Identifiable {
@@ -17,6 +19,7 @@ struct PendingSheet: Identifiable {
     let url: URL
     let info: WorkbookSheetInfo
     let rows: [SheetRow]
+    var hiddenColumns: [ClosedRange<Int>] = []
     var headerRow: Int
     var mapping: ColumnMapping
     /// Set when re-mapping an already imported sheet.
@@ -156,7 +159,7 @@ final class AppModel {
 
     func showImportPanel() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "xlsx") ?? .data]
+        panel.allowedContentTypes = ["xlsx", "xlsm"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
         panel.message = "Excel-Takelisten (.xlsx) auswählen"
         panel.prompt = "Importieren"
@@ -177,7 +180,7 @@ final class AppModel {
 
     func importFiles(_ urls: [URL]) {
         for url in urls where !pendingFiles.contains(where: { $0.url == url }) {
-            guard url.pathExtension.lowercased() == "xlsx" else {
+            guard ["xlsx", "xlsm"].contains(url.pathExtension.lowercased()) else {
                 errorMessage = "„\(url.lastPathComponent)“ ist keine .xlsx-Datei. Bitte alte .xls-Dateien in Excel als .xlsx sichern."
                 continue
             }
@@ -186,8 +189,16 @@ final class AppModel {
                 let wb = try Workbook(url: url, data: data)
                 guard !wb.sheets.isEmpty else { errorMessage = "„\(url.lastPathComponent)“ enthält keine Tabellenblätter."; continue }
                 let already = Set(sheets.filter { $0.fileURL == url }.map(\.sheetPath))
-                let selection = Set(wb.sheets.map(\.path).filter { !already.contains($0) })
-                pendingFiles.append(PendingFile(url: url, workbook: wb, data: data, selection: selection))
+                var stats: [String: (rows: Int, columns: Int)] = [:]
+                for info in wb.sheets {
+                    if let (rows, hidden) = try? wb.loadSheet(info) {
+                        let filled = rows.filter { !$0.cells.allSatisfy { $0.value.isBlank } }.count
+                        stats[info.path] = (filled, SheetColumns.used(rows, hidden: hidden).count)
+                    }
+                }
+                // Preselect every sheet with content (header + at least one row) that isn't open yet.
+                let selection = Set(wb.sheets.map(\.path).filter { !already.contains($0) && (stats[$0]?.rows ?? 0) >= 2 })
+                pendingFiles.append(PendingFile(url: url, workbook: wb, data: data, selection: selection, stats: stats))
             } catch {
                 errorMessage = "„\(url.lastPathComponent)“ konnte nicht gelesen werden: \(error.localizedDescription)"
             }
@@ -203,10 +214,10 @@ final class AppModel {
         if sources[file.url] == nil { sources[file.url] = file.data }
         for info in file.workbook.sheets where file.selection.contains(info.path) {
             do {
-                let rows = try file.workbook.loadRows(info)
+                let (rows, hidden) = try file.workbook.loadSheet(info)
                 let header = ColumnDetector.guessHeaderRow(rows)
-                let mapping = ColumnDetector.detect(rows: rows, headerRow: header, fps: settings.fps)
-                pendingSheets.append(PendingSheet(url: file.url, info: info, rows: rows, headerRow: header, mapping: mapping))
+                let mapping = ColumnDetector.detect(rows: rows, headerRow: header, fps: settings.fps, hidden: hidden)
+                pendingSheets.append(PendingSheet(url: file.url, info: info, rows: rows, hiddenColumns: hidden, headerRow: header, mapping: mapping))
             } catch {
                 errorMessage = "Tabellenblatt „\(info.name)“: \(error.localizedDescription)"
             }
@@ -230,7 +241,8 @@ final class AppModel {
             splitIssues.removeAll { $0.refs.contains { $0.sheetID == existing } }
         } else {
             let sheet = TakeSheet(fileURL: pending.url, sheetName: pending.info.name, sheetPath: pending.info.path,
-                                  rows: pending.rows, headerRowIndex: pending.headerRow, mapping: pending.mapping)
+                                  rows: pending.rows, headerRowIndex: pending.headerRow, mapping: pending.mapping,
+                                  hiddenColumns: pending.hiddenColumns)
             sheets.append(sheet)
             selectedSheetID = sheet.id
         }
@@ -248,19 +260,22 @@ final class AppModel {
     func remap(_ sheetID: UUID) {
         guard let s = sheet(sheetID) else { return }
         pendingSheets.append(PendingSheet(url: s.fileURL, info: WorkbookSheetInfo(name: s.sheetName, path: s.sheetPath),
-                                          rows: s.rows, headerRow: s.headerRowIndex, mapping: s.mapping, existingSheetID: s.id))
+                                          rows: s.rows, hiddenColumns: s.hiddenColumns, headerRow: s.headerRowIndex,
+                                          mapping: s.mapping, existingSheetID: s.id))
     }
 
     func closeSheet(_ id: UUID) {
         guard let s = sheet(id) else { return }
-        if s.isModified, dirtyFiles.contains(s.fileURL) {
-            let alert = NSAlert()
-            alert.messageText = "„\(s.title)“ schließen?"
-            alert.informativeText = "Die Tabelle enthält Änderungen, die noch nicht exportiert wurden."
-            alert.addButton(withTitle: "Schließen")
-            alert.addButton(withTitle: "Abbrechen")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Tabelle „\(s.sheetName)“ wirklich entfernen?"
+        let unsaved = s.isModified && dirtyFiles.contains(s.fileURL)
+        alert.informativeText = "„\(s.title)“ wird aus der App entfernt. Alle Änderungen an dieser Tabelle gehen verloren"
+            + (unsaved ? " – sie wurden noch nicht exportiert." : ".") + " Die Excel-Datei selbst bleibt unverändert."
+        alert.addButton(withTitle: "Entfernen")
+        alert.addButton(withTitle: "Abbrechen")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         let idx = sheets.firstIndex { $0.id == id } ?? 0
         sheets.removeAll { $0.id == id }
         proposals.removeAll { $0.sheetID == id }
@@ -413,7 +428,6 @@ final class AppModel {
         }
         guard changed else { return }
         sheets[s].rows[r] = row
-        sheets[s].columnCount = max(sheets[s].columnCount, row.cells.count)
         sheets[s].isModified = true
         dirtyFiles.insert(sheets[s].fileURL)
         proposals.removeAll { $0.rowID == ref.rowID }

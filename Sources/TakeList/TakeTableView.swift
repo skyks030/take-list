@@ -78,7 +78,7 @@ struct TakeTableView: NSViewRepresentable {
             guard let table else { return }
             // Never reload under an active cell editor; the commit triggers the next update anyway.
             if editing != nil { return }
-            let key = "\(v.sheet.id)|\(v.sheet.columnCount)|\(v.sheet.headers.joined(separator: "\u{1}"))|\(v.sheet.mapping)"
+            let key = "\(v.sheet.id)|\(v.sheet.displayColumns)|\(v.sheet.headers.joined(separator: "\u{1}"))|\(v.sheet.mapping)"
             var reload = false
             if key != structureKey {
                 structureKey = key
@@ -119,7 +119,9 @@ struct TakeTableView: NSViewRepresentable {
             }
             add("num", "Zeile", 54, tip: "Zeilennummer in der Excel-Tabelle")
             let m = sheet.mapping
-            for (i, h) in sheet.headers.enumerated() {
+            let headers = sheet.headers
+            for i in sheet.displayColumns {
+                let h = headers[i]
                 let label = m.label(for: i)
                 let title = label.map { "\(h)  ‹\($0)›" } ?? h
                 let width: CGFloat

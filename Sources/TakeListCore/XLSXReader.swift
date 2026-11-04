@@ -77,9 +77,15 @@ public struct Workbook {
 
     /// Reads all rows of a worksheet.
     public func loadRows(_ info: WorkbookSheetInfo) throws -> [SheetRow] {
+        try loadSheet(info).rows
+    }
+
+    /// Reads all rows plus the column ranges hidden in Excel.
+    public func loadSheet(_ info: WorkbookSheetInfo) throws -> (rows: [SheetRow], hiddenColumns: [ClosedRange<Int>]) {
         guard let xml = archive[info.path] else { throw ZipError.invalid("Tabellenblatt fehlt") }
         let parser = SheetParser(shared: sharedStrings)
-        return parser.parse(xml)
+        let rows = parser.parse(xml)
+        return (rows, parser.hidden)
     }
 }
 
@@ -164,6 +170,7 @@ final class SheetParser: NSObject, XMLParserDelegate {
     var inPhonetic = false
     var value: String?
     var inlineText = ""
+    var hidden: [ClosedRange<Int>] = []
 
     init(shared: [String]) { self.shared = shared }
 
@@ -177,6 +184,10 @@ final class SheetParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
                 qualifiedName qName: String?, attributes a: [String: String] = [:]) {
         switch localName(elementName) {
+        case "col":
+            if a["hidden"] == "1" || a["hidden"] == "true", let lo = a["min"].flatMap(Int.init), let hi = a["max"].flatMap(Int.init), lo >= 1, hi >= lo {
+                hidden.append((lo - 1)...(hi - 1))
+            }
         case "row":
             let n = a["r"].flatMap(Int.init) ?? (rowNumber + 1)
             // Fill gaps so row indices stay aligned with the sheet.

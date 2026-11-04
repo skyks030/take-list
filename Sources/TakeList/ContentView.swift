@@ -136,6 +136,7 @@ struct EmptyStateView: View {
             Text("Excel-Datei (.xlsx) importieren oder hierher ziehen.")
                 .foregroundStyle(.secondary)
             Button("Excel-Tabelle importieren …") { model.showImportPanel() }
+                .accessibilityIdentifier("import-center")
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
         }
@@ -152,10 +153,18 @@ struct SheetTabBar: View {
                 ForEach(model.sheets) { sheet in
                     SheetTab(sheet: sheet, selected: sheet.id == model.selectedSheetID)
                 }
-                Button { model.showImportPanel() } label: { Image(systemName: "plus") }
-                    .buttonStyle(.borderless)
-                    .padding(.horizontal, 8)
-                    .help("Weitere Tabelle importieren")
+                Button {
+                    model.showImportPanel()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Weitere Tabelle oder weitere Blätter importieren")
+                .accessibilityLabel("Tabelle hinzufügen")
+                .accessibilityIdentifier("tab-add")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -169,38 +178,59 @@ struct SheetTab: View {
     let sheet: TakeSheet
     let selected: Bool
     @State private var hover = false
+    @State private var closeHover = false
 
     var body: some View {
         let changes = model.proposals.filter { $0.sheetID == sheet.id }.count
         let warnings = model.issues.filter { $0.refs.first?.sheetID == sheet.id }.count
-        HStack(spacing: 6) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(sheet.sheetName).font(.callout.weight(selected ? .semibold : .regular)).lineLimit(1)
-                Text(sheet.fileURL.deletingPathExtension().lastPathComponent).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        // Two sibling buttons (no tap gesture on a parent) so the close button always gets its click.
+        HStack(spacing: 4) {
+            Button {
+                model.selectedSheetID = sheet.id
+            } label: {
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(sheet.sheetName).font(.callout.weight(selected ? .semibold : .regular)).lineLimit(1)
+                        Text(sheet.fileURL.deletingPathExtension().lastPathComponent).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    if changes > 0 { Badge(count: changes, color: .blue) }
+                    if warnings > 0 { Badge(count: warnings, color: .orange) }
+                    if model.dirtyFiles.contains(sheet.fileURL), sheet.isModified {
+                        Circle().fill(.secondary).frame(width: 6, height: 6).help("Geändert, noch nicht exportiert")
+                    }
+                }
+                .padding(.leading, 10).padding(.vertical, 5)
+                .contentShape(Rectangle())
             }
-            if changes > 0 { Badge(count: changes, color: .blue) }
-            if warnings > 0 { Badge(count: warnings, color: .orange) }
-            if model.dirtyFiles.contains(sheet.fileURL), sheet.isModified {
-                Circle().fill(.secondary).frame(width: 6, height: 6).help("Geändert, noch nicht exportiert")
+            .buttonStyle(.plain)
+            .help(sheet.title)
+            .accessibilityIdentifier("tab-select")
+
+            Button {
+                model.closeSheet(sheet.id)
+            } label: {
+                Image(systemName: closeHover ? "xmark.circle.fill" : "xmark")
+                    .font(.system(size: closeHover ? 13 : 9, weight: .bold))
+                    .foregroundStyle(closeHover ? Color.primary : Color.secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
             }
-            Button { model.closeSheet(sheet.id) } label: { Image(systemName: "xmark").font(.caption2.weight(.bold)) }
-                .buttonStyle(.borderless)
-                .opacity(hover || selected ? 1 : 0)
-                .help("Tabelle schließen")
+            .buttonStyle(.plain)
+            .onHover { closeHover = $0 }
+            .padding(.trailing, 6)
+            .help("Tabelle entfernen")
+            .accessibilityLabel("Tabelle \(sheet.sheetName) entfernen")
+            .accessibilityIdentifier("tab-close")
         }
-        .padding(.horizontal, 10).padding(.vertical, 5)
-        .frame(maxWidth: 260)
+        .frame(maxWidth: 280)
         .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Color.accentColor.opacity(0.18) : (hover ? Color.primary.opacity(0.06) : .clear)))
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(selected ? Color.accentColor.opacity(0.5) : .clear))
-        .contentShape(Rectangle())
-        .onTapGesture { model.selectedSheetID = sheet.id }
         .onHover { hover = $0 }
-        .help(sheet.title)
         .contextMenu {
             Button("Spaltenzuordnung ändern …") { model.remap(sheet.id) }
             Button("Im Finder zeigen") { NSWorkspace.shared.activateFileViewerSelecting([sheet.fileURL]) }
             Divider()
-            Button("Tabelle schließen") { model.closeSheet(sheet.id) }
+            Button("Tabelle entfernen …") { model.closeSheet(sheet.id) }
         }
     }
 }

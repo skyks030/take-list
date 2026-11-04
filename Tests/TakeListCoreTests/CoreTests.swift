@@ -100,6 +100,25 @@ final class CoreTests: XCTestCase {
     }
 }
 
+final class ColumnTests: XCTestCase {
+    func testFormattedEmptyAndHiddenColumnsAreIgnored() {
+        let styled = Cell(.empty, style: 3)
+        let rows = [
+            SheetRow(cells: [Cell(.string("ID")), Cell(.string("TC In")), Cell(.string("TC Out")), Cell(.string("Rolle")), Cell(.string("Text")), Cell(.string("Notiz")), styled, styled]),
+            SheetRow(cells: [Cell(.number(1)), Cell(.string("10:00:00:00")), Cell(.string("10:00:01:00")), Cell(.string("Anna")), Cell(.string("Hallo.")), Cell(.string("x")), styled, styled]),
+            SheetRow(cells: [Cell(.number(2)), Cell(.string("10:00:02:00")), Cell(.string("10:00:03:00")), Cell(.string("Ben")), Cell(.string("Hi.")), .init(), styled, styled]),
+        ]
+        XCTAssertEqual(SheetColumns.used(rows), [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(SheetColumns.used(rows, hidden: [5...16383]), [0, 1, 2, 3, 4])
+        let sheet = TakeSheet(fileURL: URL(fileURLWithPath: "/x.xlsx"), sheetName: "A", sheetPath: "", rows: rows, headerRowIndex: 0,
+                              mapping: ColumnDetector.detect(rows: rows, headerRow: 0, fps: 25), hiddenColumns: [5...16383])
+        XCTAssertEqual(sheet.displayColumns, [0, 1, 2, 3, 4])
+        // An ID column of 1, 2, 3 must not be taken for a timecode.
+        XCTAssertNil(Timecode(fps: 25).parse(Cell(.number(2))))
+        XCTAssertEqual(sheet.mapping, ColumnMapping(tcIn: 1, tcOut: 2, role: 3, text: 4, takeNumber: nil))
+    }
+}
+
 final class CharacterAndMarkerTests: XCTestCase {
     func testCharacterCheck() {
         let f = CharacterCheck.analyze("Für dich – „ja“…")

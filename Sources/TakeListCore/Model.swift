@@ -106,15 +106,29 @@ public struct TakeSheet: Identifiable, Equatable {
     public var rows: [SheetRow]
     public var headerRowIndex: Int
     public var mapping: ColumnMapping
-    public var columnCount: Int
+    /// Columns hidden in Excel.
+    public var hiddenColumns: [ClosedRange<Int>]
+    /// Columns that actually contain something (formatted-but-empty cells don't count) and are not hidden.
+    public var usedColumns: [Int]
     /// Set whenever the content diverges from the file on disk.
     public var isModified = false
 
-    public init(fileURL: URL, sheetName: String, sheetPath: String, rows: [SheetRow], headerRowIndex: Int, mapping: ColumnMapping) {
+    public init(fileURL: URL, sheetName: String, sheetPath: String, rows: [SheetRow], headerRowIndex: Int, mapping: ColumnMapping,
+                hiddenColumns: [ClosedRange<Int>] = []) {
         self.fileURL = fileURL; self.sheetName = sheetName; self.sheetPath = sheetPath
         self.rows = rows; self.headerRowIndex = headerRowIndex; self.mapping = mapping
-        self.columnCount = max(1, rows.map(\.cells.count).max() ?? 1)
+        self.hiddenColumns = hiddenColumns
+        self.usedColumns = SheetColumns.used(rows, hidden: hiddenColumns)
     }
+
+    /// Columns shown in the app: used columns plus every mapped column.
+    public var displayColumns: [Int] {
+        let mapped = [mapping.tcIn, mapping.tcOut, mapping.role, mapping.text, mapping.takeNumber].compactMap { $0 }
+        return Array(Set(usedColumns).union(mapped)).sorted()
+    }
+
+    /// Width of the column index space that is shown (indices into `headers`).
+    public var columnCount: Int { (displayColumns.last ?? 0) + 1 }
 
     public var title: String { "\(fileURL.deletingPathExtension().lastPathComponent) – \(sheetName)" }
 
@@ -132,6 +146,17 @@ public struct TakeSheet: Identifiable, Equatable {
     /// A row counts as an actual take once any of the mapped columns has content.
     public func isTake(_ row: SheetRow) -> Bool {
         [mapping.tcIn, mapping.tcOut, mapping.role, mapping.text].contains { !row.text($0).isEmpty }
+    }
+}
+
+public enum SheetColumns {
+    /// Indices of columns with at least one non-blank cell, excluding columns hidden in Excel.
+    public static func used(_ rows: [SheetRow], hidden: [ClosedRange<Int>] = []) -> [Int] {
+        var used = Set<Int>()
+        for row in rows {
+            for (c, cell) in row.cells.enumerated() where !used.contains(c) && !cell.value.isBlank { used.insert(c) }
+        }
+        return used.filter { c in !hidden.contains { $0.contains(c) } }.sorted()
     }
 }
 
