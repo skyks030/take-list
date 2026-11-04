@@ -18,6 +18,26 @@ struct ChangesSidebar: View {
             .labelsHidden()
             .padding(.horizontal, 10).padding(.vertical, 8)
 
+            HStack {
+                Spacer()
+                Menu {
+                    ForEach(IssueKind.allCases) { kind in
+                        Toggle(kind.title, isOn: Binding(get: { !model.hiddenKinds.contains(kind) },
+                                                         set: { on in if on { model.hiddenKinds.remove(kind) } else { model.hiddenKinds.insert(kind) } }))
+                    }
+                    Divider()
+                    Button("Alle Typen zeigen") { model.hiddenKinds.removeAll() }
+                } label: {
+                    Label(model.hiddenKinds.isEmpty ? "Warnungstypen" : "Warnungstypen (\(model.hiddenKinds.count) ausgeblendet)",
+                          systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .font(.caption)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 4)
+
             if model.settingsChangedSinceScan {
                 Label("Einstellungen geändert – erneut scannen", systemImage: "arrow.clockwise")
                     .font(.caption)
@@ -129,6 +149,9 @@ struct IssueRow: View {
         case .missingRole, .missingTimecode, .invalidTimecode, .reversedTimecode: return .red
         case .overlap, .cannotSplit: return .orange
         case .roleSpelling: return .yellow
+        case .encodingDamage: return .red
+        case .specialCharacters: return .purple
+        case .umlauts: return .teal
         }
     }
 
@@ -155,6 +178,18 @@ struct IssueRow: View {
                         model.navigate(toIssue: issue, advance: true)
                     }
                     .buttonStyle(.link)
+                    .font(.caption)
+                }
+                if [.umlauts, .specialCharacters, .encodingDamage].contains(issue.kind) {
+                    Menu("Beheben") {
+                        ForEach(AppModel.CharacterFix.allCases) { fix in
+                            Button(fix.label) { model.fixCharacters(issue.refs, fix) }
+                        }
+                        Divider()
+                        Button("Zeile bearbeiten …") { if let r = issue.refs.first { model.editingRow = r } }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                     .font(.caption)
                 }
                 if issue.kind == .roleSpelling {

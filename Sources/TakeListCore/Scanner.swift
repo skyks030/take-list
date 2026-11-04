@@ -50,6 +50,8 @@ public struct ScanSettings: Codable, Equatable {
     public var checkRoleSpelling = true
     public var roleTolerance = 1
     public var roleScope = RoleScope.file
+    public var checkUmlauts = true
+    public var checkSpecialCharacters = true
 
     public init() {}
 
@@ -74,6 +76,8 @@ public struct ScanSettings: Codable, Equatable {
         checkRoleSpelling = (try? c.decode(Bool.self, forKey: .checkRoleSpelling)) ?? d.checkRoleSpelling
         roleTolerance = (try? c.decode(Int.self, forKey: .roleTolerance)) ?? d.roleTolerance
         roleScope = (try? c.decode(RoleScope.self, forKey: .roleScope)) ?? d.roleScope
+        checkUmlauts = (try? c.decode(Bool.self, forKey: .checkUmlauts)) ?? d.checkUmlauts
+        checkSpecialCharacters = (try? c.decode(Bool.self, forKey: .checkSpecialCharacters)) ?? d.checkSpecialCharacters
     }
 }
 
@@ -103,8 +107,10 @@ public struct RowRef: Hashable {
     public init(sheetID: UUID, rowID: UUID) { self.sheetID = sheetID; self.rowID = rowID }
 }
 
-public enum IssueKind: String {
+public enum IssueKind: String, CaseIterable, Identifiable {
     case missingRole, missingTimecode, invalidTimecode, reversedTimecode, overlap, roleSpelling, cannotSplit
+    case encodingDamage, specialCharacters, umlauts
+    public var id: String { rawValue }
     public var title: String {
         switch self {
         case .missingRole: return "Keine Rolle"
@@ -114,6 +120,9 @@ public enum IssueKind: String {
         case .overlap: return "Überlappung"
         case .roleSpelling: return "Mögliche Schreibvariante"
         case .cannotSplit: return "Nicht teilbar"
+        case .encodingDamage: return "Kodierungsfehler"
+        case .specialCharacters: return "Sonderzeichen"
+        case .umlauts: return "Umlaute"
         }
     }
     public var symbol: String {
@@ -123,6 +132,9 @@ public enum IssueKind: String {
         case .overlap: return "arrow.left.and.right.square"
         case .roleSpelling: return "textformat.abc.dottedunderline"
         case .cannotSplit: return "scissors"
+        case .encodingDamage: return "exclamationmark.octagon"
+        case .specialCharacters: return "character.cursor.ibeam"
+        case .umlauts: return "character"
         }
     }
 }
@@ -368,6 +380,9 @@ public enum Scanner {
                     }
                 }
                 if let a = info.inF, let b = info.outF, b > a { timed.append((row, a, b, role.lowercased())) }
+                if settings.checkUmlauts || settings.checkSpecialCharacters, let issue = characterIssue(row, sheet, settings, ref, label) {
+                    issues.append(issue)
+                }
             }
             if settings.checkOverlap {
                 let groups: [[(row: SheetRow, inF: Int, outF: Int, role: String)]] =
@@ -391,6 +406,38 @@ public enum Scanner {
         }
         if settings.checkRoleSpelling { issues += roleSpelling(sheets, settings: settings) }
         return issues
+    }
+
+    /// Columns that end up in markers/exports and are checked for special characters.
+    public static func textColumns(_ m: ColumnMapping) -> [(Int, String)] {
+        var cols: [(Int, String)] = []
+        if let c = m.role { cols.append((c, "Rolle")) }
+        if let c = m.text, c != m.role { cols.append((c, "Text")) }
+        if let c = m.takeNumber, c != m.text, c != m.role { cols.append((c, "Take-Nr.")) }
+        return cols
+    }
+
+    static func characterIssue(_ row: SheetRow, _ sheet: TakeSheet, _ settings: ScanSettings, _ ref: [RowRef], _ label: String) -> Issue? {
+        var parts: [String] = []
+        var damaged = false, special = false, umlaut = false
+        for (col, name) in textColumns(sheet.mapping) {
+            let f = CharacterCheck.analyze(row.cell(col).text)
+            var bits: [String] = []
+            if f.damaged { damaged = true; bits.append("vermutlich falsch kodiert") }
+            if settings.checkSpecialCharacters, !f.special.isEmpty {
+                special = true
+                bits.append("Sonderzeichen " + f.special.prefix(8).map(CharacterCheck.describe).joined(separator: ", "))
+            }
+            if settings.checkUmlauts, !f.umlauts.isEmpty {
+                umlaut = true
+                bits.append("Umlaute " + f.umlauts.map { String($0) }.joined(separator: " "))
+            }
+            if !bits.isEmpty { parts.append("\(name): " + bits.joined(separator: "; ")) }
+        }
+        guard !parts.isEmpty else { return nil }
+        let kind: IssueKind = damaged ? .encodingDamage : (special ? .specialCharacters : .umlauts)
+        _ = umlaut
+        return Issue(kind: kind, message: "\(label) – " + parts.joined(separator: " · "), refs: ref, key: "chars-\(kind.rawValue)-\(row.id)")
     }
 
     static func roleKey(_ s: String) -> String {

@@ -7,10 +7,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func application(_ application: NSApplication, open urls: [URL]) {
-        Task { @MainActor in AppModel.shared.importFiles(urls) }
-    }
-
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     @MainActor
@@ -38,8 +34,11 @@ struct TakeListApp: App {
                     .keyboardShortcut("o")
             }
             CommandGroup(replacing: .saveItem) {
-                Button("Exportieren …") { model.export() }
+                Button("Als Excel exportieren …") { model.export() }
                     .keyboardShortcut("e")
+                    .disabled(model.sheets.isEmpty)
+                Button("Als Marker exportieren (Nuendo / Resolve) …") { model.showMarkerExport = true }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(model.sheets.isEmpty)
                 Button("Tabelle schließen") { if let id = model.selectedSheetID { model.closeSheet(id) } }
                     .keyboardShortcut("w")
@@ -60,6 +59,12 @@ struct TakeListApp: App {
                 Divider()
                 Button("Spaltenzuordnung ändern …") { if let id = model.selectedSheetID { model.remap(id) } }
                     .disabled(model.selectedSheetID == nil)
+                Menu("Sonderzeichen in allen Tabellen") {
+                    ForEach(AppModel.CharacterFix.allCases) { fix in
+                        Button(fix.label) { model.fixCharacters(nil, fix) }
+                    }
+                }
+                .disabled(model.sheets.isEmpty)
                 Button("Ausgeblendete Warnungen wieder anzeigen") { model.restoreDismissed() }
                     .disabled(model.dismissedIssueKeys.isEmpty)
             }

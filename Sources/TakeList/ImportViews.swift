@@ -1,6 +1,24 @@
 import SwiftUI
 import TakeListCore
 
+/// Hosts the import steps in a single sheet so it can always be closed.
+struct ImportFlowView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Group {
+            if let file = model.pendingFiles.first {
+                SheetPickerView(file: file).id(file.id)
+            } else if let pending = model.pendingSheets.first {
+                MappingView(pending: pending).id(pending.id)
+            } else {
+                Color.clear.frame(width: 1, height: 1)
+            }
+        }
+        .onExitCommand { model.cancelImport() }
+    }
+}
+
 struct SheetPickerView: View {
     @Environment(AppModel.self) private var model
     @State var file: PendingFile
@@ -26,7 +44,7 @@ struct SheetPickerView: View {
                 Button("Alle") { file.selection = Set(file.workbook.sheets.map(\.path)) }
                 Button("Keine") { file.selection.removeAll() }
                 Spacer()
-                Button("Abbrechen") { model.cancelSheetSelection(file) }
+                Button("Import abbrechen") { model.cancelImport() }
                     .keyboardShortcut(.cancelAction)
                 Button("Weiter") { model.confirmSheetSelection(file) }
                     .keyboardShortcut(.defaultAction)
@@ -92,9 +110,12 @@ struct MappingView: View {
                 .frame(minHeight: 180)
 
             HStack {
-                Spacer()
-                Button(pending.existingSheetID == nil ? "Überspringen" : "Abbrechen") { model.skipMapping(pending) }
+                Button("Import abbrechen") { model.cancelImport() }
                     .keyboardShortcut(.cancelAction)
+                Spacer()
+                if pending.existingSheetID == nil {
+                    Button("Diese Tabelle überspringen") { model.skipMapping(pending) }
+                }
                 Button(pending.existingSheetID == nil ? "Importieren" : "Übernehmen") { model.confirmMapping(pending) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(pending.mapping.text == nil)
@@ -209,7 +230,10 @@ struct EditRowView: View {
                 Button("Abbrechen") { model.editingRow = nil; dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Sichern") {
-                    model.updateRow(ref, texts: texts.filter { originals[$0.key] != $0.value })
+                    let changed = texts.filter { originals[$0.key] != $0.value }
+                    model.undoManager?.beginUndoGrouping()
+                    for (col, text) in changed.sorted(by: { $0.key < $1.key }) { model.updateCell(ref, column: col, text: text) }
+                    model.undoManager?.endUndoGrouping()
                     model.editingRow = nil
                     dismiss()
                 }

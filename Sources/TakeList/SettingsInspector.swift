@@ -99,6 +99,10 @@ struct SettingsInspector: View {
                         }
                         .padding(.leading, 12)
                     }
+                    Toggle("Umlaute (Ä Ö Ü ß)", isOn: $model.settings.checkUmlauts)
+                        .help("Meldet Takes mit Umlauten – sie gehen bei falsch kodierten CSV/EDL-Importen gern verloren.")
+                    Toggle("Sonder- & unsichtbare Zeichen, Kodierungsfehler", isOn: $model.settings.checkSpecialCharacters)
+                        .help("Typografische Anführungszeichen, Gedankenstriche, …, geschützte Leerzeichen, Steuerzeichen sowie kaputte Kodierung wie „FÃ¼r“.")
                 }
             }
             .formStyle(.grouped)
@@ -133,6 +137,6 @@ struct SettingsInspector: View {
     private var integrityKey: [String] {
         let s = model.settings
         return ["\(s.fps)", "\(s.checkMissingRole)", "\(s.checkMissingTimecode)", "\(s.checkOverlap)", "\(s.overlapSameRoleOnly)",
-                "\(s.checkRoleSpelling)", "\(s.roleTolerance)", s.roleScope.rawValue]
+                "\(s.checkRoleSpelling)", "\(s.roleTolerance)", s.roleScope.rawValue, "\(s.checkUmlauts)", "\(s.checkSpecialCharacters)"]
     }
 }

@@ -100,6 +100,38 @@ final class CoreTests: XCTestCase {
     }
 }
 
+final class CharacterAndMarkerTests: XCTestCase {
+    func testCharacterCheck() {
+        let f = CharacterCheck.analyze("Für dich – „ja“…")
+        XCTAssertEqual(f.umlauts, ["ü"])
+        XCTAssertEqual(f.special, ["–", "„", "“", "…"])
+        XCTAssertFalse(f.damaged)
+        XCTAssertTrue(CharacterCheck.analyze("FÃ¼r dich").damaged)
+        XCTAssertEqual(CharacterCheck.repairedMojibake("FÃ¼r dich"), "Für dich")
+        XCTAssertEqual(CharacterCheck.replacingTypographic("„Ja“ – gut…\u{00A0}x"), "\"Ja\" - gut... x")
+        XCTAssertEqual(CharacterCheck.transliterated("Größe café"), "Groesse cafe")
+        XCTAssertTrue(CharacterCheck.analyze("Hallo, wie geht's?").isEmpty)
+    }
+
+    func testMarkers() {
+        let url = URL(fileURLWithPath: "/tmp/x.xlsx")
+        let rows = [
+            SheetRow(cells: [Cell(.string("Take")), Cell(.string("In")), Cell(.string("Out")), Cell(.string("Rolle")), Cell(.string("Text"))]),
+            SheetRow(cells: [Cell(.number(1)), Cell(.string("10:00:01:00")), Cell(.string("10:00:03:12")), Cell(.string("Anna")), Cell(.string("Sag \"hallo\""))]),
+        ]
+        let sheet = TakeSheet(fileURL: url, sheetName: "Ep 1", sheetPath: "", rows: rows, headerRowIndex: 0,
+                              mapping: ColumnMapping(tcIn: 1, tcOut: 2, role: 3, text: 4, takeNumber: 0))
+        var o = MarkerOptions()
+        o.byteOrderMark = false
+        let csv = String(decoding: MarkerExporter.export(sheet, fps: 25, options: o).data, as: UTF8.self)
+        XCTAssertEqual(csv, "\"#\",\"Name\",\"Start\",\"End\",\"Length\"\r\n\"1\",\"1 – Anna: Sag \"\"hallo\"\"\",\"10:00:01:00\",\"10:00:03:12\",\"00:00:02:12\"\r\n")
+        o.format = .resolveEDL
+        let edl = String(decoding: MarkerExporter.export(sheet, fps: 25, options: o).data, as: UTF8.self)
+        XCTAssertTrue(edl.contains("001  001      V     C        10:00:01:00 10:00:01:01 10:00:01:00 10:00:01:01"))
+        XCTAssertTrue(edl.contains("|C:ResolveColorBlue |M:1 – Anna: Sag \"hallo\" |D:62"))
+    }
+}
+
 /// End-to-end run against a real Excel file: TAKELIST_SAMPLE=/path/to.xlsx swift test
 final class SampleFileTests: XCTestCase {
     func testSampleFile() throws {

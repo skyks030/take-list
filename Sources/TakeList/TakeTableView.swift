@@ -11,6 +11,7 @@ struct TakeTableView: NSViewRepresentable {
     let focus: Focus?
     let issueRows: Set<UUID>
     let onEdit: (UUID) -> Void
+    let onCommit: (UUID, Int, String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -32,6 +33,10 @@ struct TakeTableView: NSViewRepresentable {
         table.delegate = context.coordinator
         table.target = context.coordinator
         table.doubleAction = #selector(Coordinator.doubleClicked(_:))
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Zelle bearbeiten", action: #selector(Coordinator.menuEditCell(_:)), keyEquivalent: "").target = context.coordinator
+        menu.addItem(withTitle: "Ganze Zeile bearbeiten …", action: #selector(Coordinator.menuEditRow(_:)), keyEquivalent: "").target = context.coordinator
+        table.menu = menu
         scroll.documentView = table
         context.coordinator.table = table
         context.coordinator.scrollView = scroll
@@ -44,7 +49,7 @@ struct TakeTableView: NSViewRepresentable {
         context.coordinator.update(self)
     }
 
-    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
         weak var table: NSTableView?
         weak var scrollView: NSScrollView?
         var rows: [DisplayRow] = []
@@ -53,6 +58,9 @@ struct TakeTableView: NSViewRepresentable {
         var focus: Focus?
         var issueRows: Set<UUID> = []
         var onEdit: ((UUID) -> Void)?
+        var onCommit: ((UUID, Int, String) -> Void)?
+        private var editing: (rowID: UUID, col: Int, original: String, field: NSTextField)?
+        private var editCancelled = false
         private var structureKey = ""
         private var version = -1
         private var lastScrollToken: UUID?
@@ -66,7 +74,10 @@ struct TakeTableView: NSViewRepresentable {
 
         func update(_ v: TakeTableView) {
             onEdit = v.onEdit
+            onCommit = v.onCommit
             guard let table else { return }
+            // Never reload under an active cell editor; the commit triggers the next update anyway.
+            if editing != nil { return }
             let key = "\(v.sheet.id)|\(v.sheet.columnCount)|\(v.sheet.headers.joined(separator: "\u{1}"))|\(v.sheet.mapping)"
             var reload = false
             if key != structureKey {
@@ -234,7 +245,63 @@ struct TakeTableView: NSViewRepresentable {
             guard let table, rows.indices.contains(table.clickedRow) else { return }
             let d = rows[table.clickedRow]
             guard d.kind == .normal else { NSSound.beep(); return }
-            onEdit?(d.row.id)
+            if !beginEditing(row: table.clickedRow, column: table.clickedColumn) { onEdit?(d.row.id) }
+        }
+
+        @objc func menuEditCell(_ sender: Any?) {
+            guard let table, rows.indices.contains(table.clickedRow), rows[table.clickedRow].kind == .normal else { NSSound.beep(); return }
+            if !beginEditing(row: table.clickedRow, column: table.clickedColumn) { onEdit?(rows[table.clickedRow].row.id) }
+        }
+
+        @objc func menuEditRow(_ sender: Any?) {
+            guard let table, rows.indices.contains(table.clickedRow), rows[table.clickedRow].kind == .normal else { NSSound.beep(); return }
+            onEdit?(rows[table.clickedRow].row.id)
+        }
+
+        /// Starts inline editing of a sheet cell. Returns false for non-editable columns (row number, words, duration).
+        private func beginEditing(row: Int, column: Int) -> Bool {
+            guard let table, column >= 0, column < table.tableColumns.count else { return false }
+            let id = table.tableColumns[column].identifier.rawValue
+            guard id.hasPrefix("c"), let col = Int(id.dropFirst()),
+                  let field = table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTextField else { return false }
+            let (text, font, _) = content(id, rows[row])
+            editing = (rows[row].row.id, col, text, field)
+            editCancelled = false
+            field.isEditable = true
+            field.isSelectable = true
+            field.delegate = self
+            field.font = font
+            field.textColor = .labelColor
+            field.stringValue = text
+            field.drawsBackground = true
+            field.backgroundColor = .textBackgroundColor
+            table.editColumn(column, row: row, with: nil, select: true)
+            if field.currentEditor() == nil { table.window?.makeFirstResponder(field) }
+            return true
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                editCancelled = true
+                table?.window?.makeFirstResponder(table)
+                return true
+            }
+            return false
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            guard let e = editing else { return }
+            let newText = e.field.stringValue
+            e.field.isEditable = false
+            e.field.isSelectable = false
+            e.field.drawsBackground = false
+            e.field.delegate = nil
+            editing = nil
+            if !editCancelled, newText != e.original {
+                onCommit?(e.rowID, e.col, newText)
+            } else {
+                table?.reloadData()
+            }
         }
 
         private func scroll(to rowID: UUID) {

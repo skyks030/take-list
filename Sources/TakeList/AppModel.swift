@@ -69,6 +69,11 @@ final class AppModel {
     var sidebarSelection: UUID?
     var sidebarFilter: SidebarFilter = .all
     var editingRow: RowRef?
+    var hiddenKinds: Set<IssueKind> = []
+    var showMarkerExport = false
+    var markerOptions: MarkerOptions {
+        didSet { if let d = try? JSONEncoder().encode(markerOptions) { UserDefaults.standard.set(d, forKey: "markerOptions") } }
+    }
     var errorMessage: String?
     var infoMessage: String?
     @ObservationIgnored var undoManager: UndoManager?
@@ -80,6 +85,12 @@ final class AppModel {
             settings = s
         } else {
             settings = ScanSettings()
+        }
+        if let data = UserDefaults.standard.data(forKey: "markerOptions"),
+           let o = try? JSONDecoder().decode(MarkerOptions.self, from: data) {
+            markerOptions = o
+        } else {
+            markerOptions = MarkerOptions()
         }
     }
 
@@ -102,7 +113,7 @@ final class AppModel {
     }
 
     func visibleIssues() -> [Issue] {
-        let all = issues
+        let all = issues.filter { !hiddenKinds.contains($0.kind) }
         guard sidebarFilter == .current, let sel = selectedSheetID else { return all }
         return all.filter { $0.refs.contains { $0.sheetID == sel } }
     }
@@ -142,8 +153,19 @@ final class AppModel {
         importFiles(panel.urls)
     }
 
+    /// True while the import dialog (sheet selection or column mapping) is open.
+    var importActive: Bool { !pendingFiles.isEmpty || !pendingSheets.isEmpty }
+
+    /// Aborts the whole import: closes the dialog and discards everything that was not imported yet.
+    func cancelImport() {
+        let urls = Set(pendingFiles.map(\.url) + pendingSheets.filter { $0.existingSheetID == nil }.map(\.url))
+        pendingFiles.removeAll()
+        pendingSheets.removeAll()
+        for url in urls where !sheets.contains(where: { $0.fileURL == url }) { sources[url] = nil }
+    }
+
     func importFiles(_ urls: [URL]) {
-        for url in urls {
+        for url in urls where !pendingFiles.contains(where: { $0.url == url }) {
             guard url.pathExtension.lowercased() == "xlsx" else {
                 errorMessage = "„\(url.lastPathComponent)“ ist keine .xlsx-Datei. Bitte alte .xls-Dateien in Excel als .xlsx sichern."
                 continue
@@ -182,6 +204,9 @@ final class AppModel {
 
     func cancelSheetSelection(_ file: PendingFile) {
         pendingFiles.removeAll { $0.id == file.id }
+        if !sheets.contains(where: { $0.fileURL == file.url }), !pendingSheets.contains(where: { $0.url == file.url }) {
+            sources[file.url] = nil
+        }
     }
 
     func confirmMapping(_ pending: PendingSheet) {
@@ -385,6 +410,93 @@ final class AppModel {
         runIntegrity()
     }
 
+    /// Inline edit of a single cell from the table.
+    func updateCell(_ ref: RowRef, column: Int, text: String) {
+        guard let sheet = sheet(ref.sheetID), let row = row(ref) else { return }
+        let m = sheet.mapping
+        let old = row.cell(column)
+        let tc = Timecode(fps: settings.fps)
+        if (column == m.tcIn || column == m.tcOut), !m.combinedTimecode, case .number = old.value, let p = tc.parse(old) {
+            // Excel time value shown as timecode: keep it a time value if the new text is a valid timecode.
+            if text == tc.string(p.frames, style: .frames(separator: ":")) { return }
+            if let n = tc.parse(text) {
+                replaceCell(ref, column: column, with: Cell(tc.cellValue(n.frames, style: .excel), style: old.style), name: "Zelle bearbeiten")
+                return
+            }
+        }
+        updateRow(ref, texts: [column: text])
+    }
+
+    private func replaceCell(_ ref: RowRef, column: Int, with cell: Cell, name: String) {
+        guard let s = sheets.firstIndex(where: { $0.id == ref.sheetID }),
+              let r = sheets[s].rows.firstIndex(where: { $0.id == ref.rowID }) else { return }
+        registerUndo(name)
+        sheets[s].rows[r].set(column, cell)
+        markChanged(s, rowID: ref.rowID)
+    }
+
+    private func markChanged(_ s: Int, rowID: UUID?) {
+        sheets[s].isModified = true
+        dirtyFiles.insert(sheets[s].fileURL)
+        if let rowID {
+            proposals.removeAll { $0.rowID == rowID }
+            splitIssues.removeAll { $0.refs.contains { $0.rowID == rowID } }
+        }
+        runIntegrity()
+    }
+
+    enum CharacterFix: String, CaseIterable, Identifiable {
+        case typographic, transliterate, repair
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .typographic: return "Typografische & unsichtbare Zeichen ersetzen („“ – … → \" - ...)"
+            case .transliterate: return "Alles in reines ASCII umschreiben (ä → ae, ß → ss, é → e)"
+            case .repair: return "Kodierungsfehler reparieren (FÃ¼r → Für)"
+            }
+        }
+        func apply(_ s: String) -> String {
+            switch self {
+            case .typographic: return CharacterCheck.replacingTypographic(s)
+            case .transliterate: return CharacterCheck.transliterated(s)
+            case .repair: return CharacterCheck.repairedMojibake(s) ?? s
+            }
+        }
+    }
+
+    /// Applies a character fix to the role/text/take columns of the given rows (nil = all takes in all tables).
+    func fixCharacters(_ refs: [RowRef]?, _ fix: CharacterFix) {
+        let wanted = refs.map { Set($0.map(\.rowID)) }
+        var updated = sheets
+        var changed = 0
+        var files: Set<URL> = []
+        for s in updated.indices {
+            let cols = Scanner.textColumns(updated[s].mapping).map(\.0)
+            var touched = false
+            for i in updated[s].dataRange {
+                let row = updated[s].rows[i]
+                if let wanted, !wanted.contains(row.id) { continue }
+                for c in cols {
+                    let cell = row.cell(c)
+                    guard case .string(let old) = cell.value else { continue }
+                    let new = fix.apply(old)
+                    if new != old {
+                        updated[s].rows[i].set(c, Cell(.string(new), style: cell.style))
+                        touched = true
+                        changed += 1
+                    }
+                }
+            }
+            if touched { updated[s].isModified = true; files.insert(updated[s].fileURL) }
+        }
+        guard changed > 0 else { infoMessage = "Keine passenden Zeichen gefunden."; return }
+        registerUndo("Sonderzeichen ersetzen")
+        sheets = updated
+        dirtyFiles.formUnion(files)
+        runIntegrity()
+        infoMessage = "\(changed) Zelle\(changed == 1 ? "" : "n") korrigiert."
+    }
+
     // MARK: Undo
 
     private struct Snapshot {
@@ -416,20 +528,7 @@ final class AppModel {
     // MARK: Export
 
     func export() {
-        guard !sheets.isEmpty else { return }
-        if acceptedCount > 0 {
-            let alert = NSAlert()
-            alert.messageText = "\(acceptedCount) angenommene Änderung\(acceptedCount == 1 ? " ist" : "en sind") noch nicht übernommen."
-            alert.informativeText = "Sollen sie vor dem Export übernommen werden?"
-            alert.addButton(withTitle: "Übernehmen und exportieren")
-            alert.addButton(withTitle: "Ohne sie exportieren")
-            alert.addButton(withTitle: "Abbrechen")
-            switch alert.runModal() {
-            case .alertFirstButtonReturn: applyAccepted()
-            case .alertSecondButtonReturn: break
-            default: return
-            }
-        }
+        guard !sheets.isEmpty, resolvePendingAccepted() else { return }
         var files: [URL] = []
         for s in sheets where !files.contains(s.fileURL) { files.append(s.fileURL) }
         if files.count == 1 {
@@ -477,6 +576,65 @@ final class AppModel {
             errorMessage = "Export von „\(source.lastPathComponent)“ fehlgeschlagen: \(error.localizedDescription)"
             return false
         }
+    }
+
+    /// Asks to apply accepted proposals first. Returns false if the user cancelled.
+    private func resolvePendingAccepted() -> Bool {
+        guard acceptedCount > 0 else { return true }
+        let alert = NSAlert()
+        alert.messageText = "\(acceptedCount) angenommene Änderung\(acceptedCount == 1 ? " ist" : "en sind") noch nicht übernommen."
+        alert.informativeText = "Sollen sie vor dem Export übernommen werden?"
+        alert.addButton(withTitle: "Übernehmen und exportieren")
+        alert.addButton(withTitle: "Ohne sie exportieren")
+        alert.addButton(withTitle: "Abbrechen")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: applyAccepted(); return true
+        case .alertSecondButtonReturn: return true
+        default: return false
+        }
+    }
+
+    func exportMarkers(allSheets: Bool) {
+        showMarkerExport = false
+        guard resolvePendingAccepted() else { return }
+        let targets = allSheets ? sheets : (selectedSheet.map { [$0] } ?? [])
+        guard !targets.isEmpty else { return }
+        let opts = markerOptions
+        let ext = opts.format.fileExtension
+        func baseName(_ s: TakeSheet) -> String {
+            (s.fileURL.deletingPathExtension().lastPathComponent + " – " + s.sheetName).replacingOccurrences(of: "/", with: "-")
+        }
+        var dests: [(TakeSheet, URL)] = []
+        if targets.count == 1 {
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [UTType(filenameExtension: ext) ?? .data]
+            panel.directoryURL = targets[0].fileURL.deletingLastPathComponent()
+            panel.nameFieldStringValue = baseName(targets[0]) + "." + ext
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            dests = [(targets[0], url)]
+        } else {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.canCreateDirectories = true
+            panel.prompt = "Hier exportieren"
+            panel.message = "Ordner für \(targets.count) Marker-Dateien wählen (eine pro Tabelle)"
+            panel.directoryURL = targets[0].fileURL.deletingLastPathComponent()
+            guard panel.runModal() == .OK, let dir = panel.url else { return }
+            dests = targets.map { ($0, dir.appendingPathComponent(baseName($0) + "." + ext)) }
+        }
+        var total = 0, skipped = 0
+        for (sheet, url) in dests {
+            let r = MarkerExporter.export(sheet, fps: settings.fps, options: opts)
+            do { try r.data.write(to: url, options: .atomic) } catch {
+                errorMessage = "„\(url.lastPathComponent)“ konnte nicht geschrieben werden: \(error.localizedDescription)"
+                return
+            }
+            total += r.markers
+            skipped += r.skipped
+        }
+        infoMessage = "\(total) Marker in \(dests.count) Datei\(dests.count == 1 ? "" : "en") exportiert"
+            + (skipped > 0 ? " – \(skipped) Takes ohne TC In übersprungen." : ".")
     }
 
     func confirmDiscard() -> Bool {

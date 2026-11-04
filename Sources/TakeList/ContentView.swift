@@ -35,14 +35,32 @@ struct ContentView: View {
         .navigationTitle(model.selectedSheet?.title ?? "Take-Liste")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { model.showImportPanel() } label: { Label("Importieren", systemImage: "square.and.arrow.down") }
-                    .help("Excel-Tabelle importieren (⌘O)")
-                Button { model.scan() } label: { Label("Scannen", systemImage: "text.magnifyingglass") }
-                    .help("Alle Tabellen scannen (⌘R)")
-                    .disabled(model.sheets.isEmpty)
-                Button { model.export() } label: { Label("Exportieren", systemImage: "square.and.arrow.up") }
-                    .help("Bearbeitete Excel-Dateien exportieren (⌘E)")
-                    .disabled(model.sheets.isEmpty)
+                if !model.sheets.isEmpty {
+                    Button { model.showImportPanel() } label: { Label("Importieren", systemImage: "square.and.arrow.down") }
+                        .help("Weitere Excel-Tabelle importieren (⌘O)")
+                    Button { model.scan() } label: { Label("Scannen", systemImage: "text.magnifyingglass") }
+                        .help("Alle Tabellen scannen (⌘R)")
+                    Menu {
+                        Button("Excel-Tabelle (.xlsx) …") { model.export() }
+                        Divider()
+                        Button("Marker-CSV für Nuendo / Cubase …") {
+                            model.markerOptions.format = .nuendoCSV
+                            model.showMarkerExport = true
+                        }
+                        Button("Marker-EDL für DaVinci Resolve …") {
+                            model.markerOptions.format = .resolveEDL
+                            model.showMarkerExport = true
+                        }
+                    } label: {
+                        Label("Exportieren", systemImage: "square.and.arrow.up")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .fixedSize()
+                    .help("Als Excel-Tabelle oder als Marker-Spur exportieren")
+                }
                 Button { showInspector.toggle() } label: { Label("Einstellungen", systemImage: "sidebar.right") }
                     .help("Einstellungen ein-/ausblenden")
             }
@@ -62,11 +80,12 @@ struct ContentView: View {
                 RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor, lineWidth: 3).padding(4).allowsHitTesting(false)
             }
         }
-        .sheet(item: Binding(get: { model.pendingFiles.first }, set: { _ in })) { file in
-            SheetPickerView(file: file)
+        // One sheet for the whole import flow; closing it (Esc / Abbrechen) always aborts the import.
+        .sheet(isPresented: Binding(get: { model.importActive }, set: { if !$0 { model.cancelImport() } })) {
+            ImportFlowView().environment(model)
         }
-        .sheet(item: Binding(get: { model.pendingFiles.isEmpty ? model.pendingSheets.first : nil }, set: { _ in })) { pending in
-            MappingView(pending: pending)
+        .sheet(isPresented: $model.showMarkerExport) {
+            MarkerExportView().environment(model)
         }
         .sheet(item: Binding(get: { model.editingRow.map(EditTarget.init) }, set: { if $0 == nil { model.editingRow = nil } })) { target in
             EditRowView(ref: target.ref)
@@ -209,7 +228,8 @@ struct SheetDetail: View {
             TakeTableView(sheet: sheet, rows: rows, version: model.version, settings: model.settings,
                           focus: model.focus?.sheetID == sheet.id ? model.focus : nil,
                           issueRows: issueRows,
-                          onEdit: { id in model.editingRow = RowRef(sheetID: sheet.id, rowID: id) })
+                          onEdit: { id in model.editingRow = RowRef(sheetID: sheet.id, rowID: id) },
+                          onCommit: { id, col, text in model.updateCell(RowRef(sheetID: sheet.id, rowID: id), column: col, text: text) })
             Divider()
             SheetStatusBar(sheet: sheet, rows: rows)
         }
@@ -229,7 +249,7 @@ struct SheetStatusBar: View {
             Text("Zuordnung: TC In \(col(m.tcIn)) · TC Out \(col(m.tcOut)) · Rolle \(col(m.role)) · Text \(col(m.text))\(m.takeNumber.map { " · Take-Nr. \(columnLetters($0))" } ?? "")")
             Button("Ändern …") { model.remap(sheet.id) }.buttonStyle(.link)
             Spacer()
-            Text("Doppelklick auf eine Zeile zum Bearbeiten").foregroundStyle(.tertiary)
+            Text("Doppelklick auf eine Zelle zum Bearbeiten · ⌥↩ = Zeilenumbruch · Esc = Abbrechen").foregroundStyle(.tertiary)
         }
         .font(.caption)
         .foregroundStyle(.secondary)

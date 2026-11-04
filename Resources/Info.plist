@@ -16,15 +16,5 @@
     <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSHumanReadableCopyright</key><string>© 2026 Tonbüro</string>
-    <key>CFBundleDocumentTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleTypeName</key><string>Excel-Takeliste</string>
-            <key>CFBundleTypeRole</key><string>Editor</string>
-            <key>LSHandlerRank</key><string>Alternate</string>
-            <key>LSItemContentTypes</key>
-            <array><string>org.openxmlformats.spreadsheetml.sheet</string></array>
-        </dict>
-    </array>
 </dict>
 </plist>
