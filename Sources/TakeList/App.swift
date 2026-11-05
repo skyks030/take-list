@@ -2,16 +2,23 @@ import AppKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by the updater, which already asked about unexported changes before quitting.
+    @MainActor static var skipTerminationPrompt = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        // Look for a new version on every launch (quietly – only a found update shows up).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            MainActor.assumeIsolated { Updater.shared.check(userInitiated: false) }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if AppModel.shared.isDirty, !AppModel.shared.confirmDiscard() { return .terminateCancel }
+        if !Self.skipTerminationPrompt, AppModel.shared.isDirty, !AppModel.shared.confirmDiscard() { return .terminateCancel }
         return .terminateNow
     }
 }
@@ -29,6 +36,9 @@ struct TakeListApp: App {
         }
         .defaultSize(width: 1500, height: 900)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Nach Updates suchen …") { Updater.shared.check(userInitiated: true) }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Excel-Tabelle importieren …") { model.showImportPanel() }
                     .keyboardShortcut("o")
@@ -40,6 +50,9 @@ struct TakeListApp: App {
                 Button("Als Marker exportieren (Nuendo / Resolve) …") { model.showMarkerExport = true }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(model.sheets.isEmpty)
+                Button("Listen zusammenführen …") { model.showMerge = true }
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                    .disabled(model.mergeableCount < 2)
                 Button("Tabelle schließen") { if let id = model.selectedSheetID { model.closeSheet(id) } }
                     .keyboardShortcut("w")
                     .disabled(model.selectedSheetID == nil)

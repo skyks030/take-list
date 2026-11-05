@@ -29,6 +29,19 @@ public struct MarkerOptions: Codable, Equatable {
     public var extraColumns = false
     public var colorByRole = true
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        // Tolerant decoding so new options never discard stored ones (e.g. after an update).
+        let d = MarkerOptions()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        format = (try? c.decode(MarkerFormat.self, forKey: .format)) ?? d.format
+        name = (try? c.decode(MarkerName.self, forKey: .name)) ?? d.name
+        semicolon = (try? c.decode(Bool.self, forKey: .semicolon)) ?? d.semicolon
+        byteOrderMark = (try? c.decode(Bool.self, forKey: .byteOrderMark)) ?? d.byteOrderMark
+        asciiOnly = (try? c.decode(Bool.self, forKey: .asciiOnly)) ?? d.asciiOnly
+        extraColumns = (try? c.decode(Bool.self, forKey: .extraColumns)) ?? d.extraColumns
+        colorByRole = (try? c.decode(Bool.self, forKey: .colorByRole)) ?? d.colorByRole
+    }
 }
 
 public struct MarkerResult {

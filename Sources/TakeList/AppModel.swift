@@ -80,7 +80,10 @@ final class AppModel {
     var pendingSheets: [PendingSheet] = []
     var focus: Focus?
     var sidebarSelection: UUID?
-    var sidebarFilter: SidebarFilter = .all
+    var sidebarFilter: SidebarFilter = .all {
+        didSet { UserDefaults.standard.set(sidebarFilter.rawValue, forKey: "sidebarFilter") }
+    }
+    var showMerge = false
     var editingRow: RowRef?
     var showMarkerExport = false
     var markerOptions: MarkerOptions {
@@ -103,6 +106,9 @@ final class AppModel {
             markerOptions = o
         } else {
             markerOptions = MarkerOptions()
+        }
+        if let raw = UserDefaults.standard.string(forKey: "sidebarFilter"), let f = SidebarFilter(rawValue: raw) {
+            sidebarFilter = f
         }
     }
 
@@ -288,6 +294,46 @@ final class AppModel {
         if focus?.sheetID == id { focus = nil }
         undoManager?.removeAllActions()
         runIntegrity()
+    }
+
+    // MARK: Merge
+
+    /// Lists that can take part in a merge (they need a TC In column).
+    var mergeableCount: Int { sheets.filter { $0.mapping.tcIn != nil }.count }
+
+    /// Adds a new table built from `inputs` (already in merged order with their offsets).
+    func merge(_ inputs: [MergeInput], name: String) {
+        guard let template = inputs.first?.sheet else { return }
+        guard let original = sources[template.fileURL] else {
+            errorMessage = "Originaldaten für „\(template.fileURL.lastPathComponent)“ fehlen."
+            return
+        }
+        // The merged list is a new, not yet saved file next to the first list.
+        let dir = template.fileURL.deletingLastPathComponent()
+        let stem = template.fileURL.deletingPathExtension().lastPathComponent + " – " + name.replacingOccurrences(of: "/", with: "-")
+        var url = dir.appendingPathComponent(stem + ".xlsx")
+        var n = 2
+        while sources[url] != nil || FileManager.default.fileExists(atPath: url.path) {
+            url = dir.appendingPathComponent("\(stem) \(n).xlsx")
+            n += 1
+        }
+        do {
+            let package = try XLSXExporter.singleSheetPackage(original: original, sheetPath: template.sheetPath, name: name)
+            guard let result = ListMerger.merge(inputs, name: name, fileURL: url, fps: settings.fps) else { return }
+            registerUndo("Listen zusammenführen")
+            sources[url] = package
+            sheets.append(result.sheet)
+            dirtyFiles.insert(url)
+            selectedSheetID = result.sheet.id
+            focus = nil
+            runIntegrity()
+            var msg = "\(inputs.count) Listen mit \(result.takes) Takes zu „\(name)“ zusammengeführt."
+            if result.unparsedTimecodes > 0 { msg += " \(result.unparsedTimecodes) unlesbare Timecodes unverändert übernommen." }
+            if !result.addedColumns.isEmpty { msg += " Zusätzliche Spalten: \(result.addedColumns.joined(separator: ", "))." }
+            infoMessage = msg
+        } catch {
+            errorMessage = "Zusammenführen fehlgeschlagen: \(error.localizedDescription)"
+        }
     }
 
     // MARK: Scan
@@ -561,7 +607,7 @@ final class AppModel {
             let panel = NSSavePanel()
             panel.allowedContentTypes = [UTType(filenameExtension: "xlsx") ?? .data]
             panel.directoryURL = url.deletingLastPathComponent()
-            panel.nameFieldStringValue = url.deletingPathExtension().lastPathComponent + " (bearbeitet).xlsx"
+            panel.nameFieldStringValue = exportStem(url) + ".xlsx"
             guard panel.runModal() == .OK, let dest = panel.url else { return }
             write(url, to: dest)
         } else {
@@ -575,16 +621,22 @@ final class AppModel {
             guard panel.runModal() == .OK, let dir = panel.url else { return }
             var written = 0
             for url in files {
-                var dest = dir.appendingPathComponent(url.deletingPathExtension().lastPathComponent + " (bearbeitet).xlsx")
+                var dest = dir.appendingPathComponent(exportStem(url) + ".xlsx")
                 var n = 2
                 while FileManager.default.fileExists(atPath: dest.path) {
-                    dest = dir.appendingPathComponent(url.deletingPathExtension().lastPathComponent + " (bearbeitet \(n)).xlsx")
+                    dest = dir.appendingPathComponent(exportStem(url) + " \(n).xlsx")
                     n += 1
                 }
                 if write(url, to: dest) { written += 1 }
             }
             infoMessage = "\(written) Datei\(written == 1 ? "" : "en") exportiert."
         }
+    }
+
+    /// "Datei (bearbeitet)" for imported files, the plain name for lists created in the app (merges).
+    private func exportStem(_ url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        return FileManager.default.fileExists(atPath: url.path) ? stem + " (bearbeitet)" : stem
     }
 
     @discardableResult
@@ -662,11 +714,11 @@ final class AppModel {
             + (skipped > 0 ? " – \(skipped) Takes ohne TC In übersprungen." : ".")
     }
 
-    func confirmDiscard() -> Bool {
+    func confirmDiscard(title: String = "Nicht exportierte Änderungen verwerfen?", button: String = "Verwerfen und beenden") -> Bool {
         let alert = NSAlert()
-        alert.messageText = "Nicht exportierte Änderungen verwerfen?"
+        alert.messageText = title
         alert.informativeText = "Einige Tabellen wurden geändert, aber noch nicht als Excel-Datei exportiert."
-        alert.addButton(withTitle: "Verwerfen und beenden")
+        alert.addButton(withTitle: button)
         alert.addButton(withTitle: "Abbrechen")
         return alert.runModal() == .alertFirstButtonReturn
     }

@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.undoManager) private var undoManager
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var showInspector = true
+    @State private var columnVisibility: NavigationSplitViewVisibility = UserDefaults.standard.object(forKey: "showSidebar") as? Bool == false ? .detailOnly : .all
+    @AppStorage("showInspector") private var showInspector = true
     @State private var dropTargeted = false
 
     var body: some View {
@@ -40,6 +40,9 @@ struct ContentView: View {
                         .help("Weitere Excel-Tabelle importieren (⌘O)")
                     Button { model.scan() } label: { Label("Scannen", systemImage: "text.magnifyingglass") }
                         .help("Alle Tabellen scannen (⌘R)")
+                    Button { model.showMerge = true } label: { Label("Zusammenführen", systemImage: "arrow.triangle.merge") }
+                        .help("Mehrere Listen zu einer Gesamtliste mit verschobenen Timecodes zusammenführen (⇧⌘M)")
+                        .disabled(model.mergeableCount < 2)
                     Menu {
                         Button("Excel-Tabelle (.xlsx) …") { model.export() }
                         Divider()
@@ -65,6 +68,7 @@ struct ContentView: View {
                     .help("Einstellungen ein-/ausblenden")
             }
         }
+        .onChange(of: columnVisibility) { _, v in UserDefaults.standard.set(v != .detailOnly, forKey: "showSidebar") }
         .onAppear { model.undoManager = undoManager }
         .onChange(of: undoManager) { _, new in model.undoManager = new }
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
@@ -86,6 +90,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $model.showMarkerExport) {
             MarkerExportView().environment(model)
+        }
+        .sheet(isPresented: $model.showMerge) {
+            MergeView().environment(model)
         }
         .sheet(item: Binding(get: { model.editingRow.map(EditTarget.init) }, set: { if $0 == nil { model.editingRow = nil } })) { target in
             EditRowView(ref: target.ref)

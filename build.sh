@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP="build/Take-Liste.app"
+VERSION="$(cat VERSION)"
+BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 echo "▸ Kompiliere …"
 swift build -c release --arch arm64 --arch x86_64 --product TakeList
 BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/TakeList"
@@ -20,7 +22,7 @@ echo "▸ Erstelle App-Bundle …"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/TakeList"
-cp Resources/Info.plist "$APP/Contents/Info.plist"
+sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist > "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 codesign --force --deep --sign - "$APP"
-echo "✓ Fertig: $APP"
+echo "✓ Fertig: $APP ($VERSION, Build $BUILD)"
