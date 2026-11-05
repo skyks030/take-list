@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.undoManager) private var undoManager
+    @Environment(\.openWindow) private var openWindow
     @State private var columnVisibility: NavigationSplitViewVisibility = UserDefaults.standard.object(forKey: "showSidebar") as? Bool == false ? .detailOnly : .all
     @AppStorage("showInspector") private var showInspector = true
     @State private var dropTargeted = false
@@ -91,8 +92,10 @@ struct ContentView: View {
         .sheet(isPresented: $model.showMarkerExport) {
             MarkerExportView().environment(model)
         }
-        .sheet(isPresented: $model.showMerge) {
-            MergeView().environment(model)
+        .onChange(of: model.showMerge) { _, show in
+            guard show else { return }
+            model.showMerge = false
+            openWindow(id: "merge")
         }
         .sheet(item: Binding(get: { model.editingRow.map(EditTarget.init) }, set: { if $0 == nil { model.editingRow = nil } })) { target in
             EditRowView(ref: target.ref)

@@ -2,9 +2,6 @@ import AppKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Set by the updater, which already asked about unexported changes before quitting.
-    @MainActor static var skipTerminationPrompt = false
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -16,10 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    /// Open tables (including unexported edits) are kept in the session and reopen on the next launch.
     @MainActor
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if !Self.skipTerminationPrompt, AppModel.shared.isDirty, !AppModel.shared.confirmDiscard() { return .terminateCancel }
-        return .terminateNow
+    func applicationWillTerminate(_ notification: Notification) {
+        AppModel.shared.saveSession()
     }
 }
 
@@ -35,6 +32,14 @@ struct TakeListApp: App {
                 .frame(minWidth: 1000, minHeight: 600)
         }
         .defaultSize(width: 1500, height: 900)
+
+        // Own window (not a sheet) so it can be resized freely; size and position are remembered.
+        Window("Listen zusammenführen", id: "merge") {
+            MergeView()
+                .environment(model)
+        }
+        .defaultSize(width: 1080, height: 600)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Nach Updates suchen …") { Updater.shared.check(userInitiated: true) }

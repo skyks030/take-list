@@ -42,6 +42,11 @@ struct MergeView: View {
 
     @State private var entries: [Entry] = []
     @State private var name = "Gesamt"
+    @State private var columns: TableColumnCustomization<Entry> = {
+        guard let d = UserDefaults.standard.data(forKey: "mergeTableColumns"),
+              let c = try? JSONDecoder().decode(TableColumnCustomization<Entry>.self, from: d) else { return TableColumnCustomization() }
+        return c
+    }()
 
     var body: some View {
         let fps = model.settings.fps
@@ -51,34 +56,13 @@ struct MergeView: View {
         let fpsLabel = SettingsInspector.frameRates.first { $0.fps == fps }?.label ?? "\(fps) fps"
 
         VStack(alignment: .leading, spacing: 14) {
-            Text("Listen zusammenführen").font(.title2.weight(.semibold))
             Text("Für jede Liste gibt der Basis-Timecode an, zu welcher Stunde sie beginnt (vorgeschlagen: die volle Stunde vor dem ersten Take). Er wird in der neuen Gesamtliste auf den Start-Timecode gelegt – alle Takes der Liste werden um denselben Betrag verschoben, ihre Abstände bleiben exakt gleich.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            ScrollView {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                    GridRow {
-                        Text("")
-                        Text("Liste")
-                        Text("Erster Take")
-                        Text("Ende")
-                        Text("Basis")
-                        Text("Neuer Start")
-                        Text("In der Gesamtliste")
-                        Text("")
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    Divider().gridCellUnsizedAxes(.horizontal)
-                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                        row(index: index, entry: entry, plan: plans[entry.id] ?? Plan(), fps: fps)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            .frame(minHeight: 120, maxHeight: 360)
+            table(plans: plans, fps: fps)
+                .frame(minHeight: 160, maxHeight: .infinity)
 
             Form {
                 TextField("Name der Gesamtliste", text: $name)
@@ -121,59 +105,123 @@ struct MergeView: View {
             }
         }
         .padding(20)
-        .frame(width: 900)
-        .onAppear {
-            entries = model.sheets.map { Entry(id: $0.id, include: true) }
+        .frame(minWidth: 820, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity)
+        .onAppear { reset() }
+        // Tables opened or closed while the window is open.
+        .onChange(of: model.sheets.map(\.id)) { _, ids in
+            entries.removeAll { !ids.contains($0.id) }
+            for id in ids where !entries.contains(where: { $0.id == id }) { entries.append(Entry(id: id, include: true)) }
         }
     }
 
-    @ViewBuilder
-    private func row(index: Int, entry: Entry, plan: Plan, fps: Int) -> some View {
+    private func binding(_ id: UUID) -> Binding<Entry>? {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return nil }
+        return $entries[i]
+    }
+
+    private func table(plans: [UUID: Plan], fps: Int) -> some View {
         let tc = Timecode(fps: fps)
-        let sheet = model.sheet(entry.id)
-        let usable = plan.span != nil
-        let bad = entry.include && usable && (plan.negative || plan.overlaps)
-        GridRow {
-            Toggle("", isOn: $entries[index].include)
-                .labelsHidden()
-                .disabled(!usable)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(sheet?.sheetName ?? "–").lineLimit(1)
-                Text(sheet?.fileURL.deletingPathExtension().lastPathComponent ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        func string(_ f: Int) -> String { tc.string(f, style: .frames(separator: ":")) }
+        return Table(entries, columnCustomization: $columns) {
+            TableColumn("") { (entry: Entry) in
+                let usable = plans[entry.id]?.span != nil
+                Toggle("", isOn: Binding(get: { entry.include && usable }, set: { v in binding(entry.id)?.wrappedValue.include = v }))
+                    .labelsHidden()
+                    .disabled(!usable)
             }
-            .frame(width: 170, alignment: .leading)
-            if let span = plan.span {
-                Text(tc.string(span.first, style: .frames(separator: ":"))).monospacedDigit()
-                Text(tc.string(span.last, style: .frames(separator: ":"))).monospacedDigit()
-                tcField(Binding(get: { entries[index].baseOverride ?? plan.base }, set: { entries[index].baseOverride = $0 }),
-                        edited: entry.baseOverride != nil, reset: { entries[index].baseOverride = nil }, fps: fps)
-                tcField(Binding(get: { entries[index].startOverride ?? plan.start }, set: { entries[index].startOverride = $0 }),
-                        edited: entry.startOverride != nil, reset: { entries[index].startOverride = nil }, fps: fps)
-                Text(plan.negative ? "beginnt vor 00:00:00:00"
-                     : "\(tc.string(plan.newFirst, style: .frames(separator: ":"))) – \(tc.string(plan.newLast, style: .frames(separator: ":")))")
-                    .monospacedDigit()
-                    .foregroundStyle(bad ? Color.red : (entry.include ? Color.primary : Color.secondary))
-                    .help(plan.overlaps ? "Überschneidet sich mit einer anderen Liste" : "")
-            } else {
-                Text("keine gültigen Timecodes").foregroundStyle(.secondary).gridCellColumns(5)
+            .width(22)
+            .customizationID("include")
+
+            TableColumn("Liste") { (entry: Entry) in
+                let sheet = model.sheet(entry.id)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(sheet?.sheetName ?? "–").lineLimit(1)
+                    Text(sheet?.fileURL.deletingPathExtension().lastPathComponent ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .help(sheet?.title ?? "")
+                .opacity(dim(entry, plans) ? 0.55 : 1)
             }
-            HStack(spacing: 2) {
-                Button { move(index, -1) } label: { Image(systemName: "chevron.up") }
-                    .disabled(index == 0)
-                Button { move(index, 1) } label: { Image(systemName: "chevron.down") }
-                    .disabled(index == entries.count - 1)
+            .width(min: 100, ideal: 220)
+            .customizationID("name")
+
+            TableColumn("Erster Take") { (entry: Entry) in
+                Text(plans[entry.id]?.span.map { string($0.first) } ?? "–").monospacedDigit()
+                    .opacity(dim(entry, plans) ? 0.55 : 1)
             }
-            .buttonStyle(.borderless)
-            .help("Reihenfolge für die vorgeschlagenen Start-Timecodes")
+            .width(min: 80, ideal: 100)
+            .customizationID("first")
+
+            TableColumn("Ende") { (entry: Entry) in
+                Text(plans[entry.id]?.span.map { string($0.last) } ?? "–").monospacedDigit()
+                    .opacity(dim(entry, plans) ? 0.55 : 1)
+            }
+            .width(min: 80, ideal: 100)
+            .customizationID("last")
+
+            TableColumn("Basis") { (entry: Entry) in
+                if let plan = plans[entry.id], plan.span != nil {
+                    tcField(Binding(get: { entry.baseOverride ?? plan.base }, set: { v in binding(entry.id)?.wrappedValue.baseOverride = v }),
+                            edited: entry.baseOverride != nil, reset: { binding(entry.id)?.wrappedValue.baseOverride = nil }, fps: fps)
+                }
+            }
+            .width(min: 110, ideal: 130)
+            .customizationID("base")
+
+            TableColumn("Neuer Start") { (entry: Entry) in
+                if let plan = plans[entry.id], plan.span != nil {
+                    tcField(Binding(get: { entry.startOverride ?? plan.start }, set: { v in binding(entry.id)?.wrappedValue.startOverride = v }),
+                            edited: entry.startOverride != nil, reset: { binding(entry.id)?.wrappedValue.startOverride = nil }, fps: fps)
+                }
+            }
+            .width(min: 110, ideal: 130)
+            .customizationID("start")
+
+            TableColumn("In der Gesamtliste") { (entry: Entry) in
+                let plan = plans[entry.id] ?? Plan()
+                let bad = entry.include && plan.span != nil && (plan.negative || plan.overlaps)
+                Group {
+                    if plan.span == nil {
+                        Text("keine gültigen Timecodes").foregroundStyle(.secondary)
+                    } else if plan.negative {
+                        Text("beginnt vor 00:00:00:00")
+                    } else {
+                        Text("\(string(plan.newFirst)) – \(string(plan.newLast))").monospacedDigit()
+                    }
+                }
+                .foregroundStyle(bad ? Color.red : (entry.include ? Color.primary : Color.secondary))
+                .help(plan.overlaps ? "Überschneidet sich mit einer anderen Liste" : "")
+            }
+            .width(min: 160, ideal: 210)
+            .customizationID("result")
+
+            TableColumn("") { (entry: Entry) in
+                let index = entries.firstIndex { $0.id == entry.id } ?? 0
+                HStack(spacing: 2) {
+                    Button { move(index, -1) } label: { Image(systemName: "chevron.up") }
+                        .disabled(index == 0)
+                    Button { move(index, 1) } label: { Image(systemName: "chevron.down") }
+                        .disabled(index == entries.count - 1)
+                }
+                .buttonStyle(.borderless)
+                .help("Reihenfolge für die vorgeschlagenen Start-Timecodes")
+            }
+            .width(46)
+            .customizationID("order")
         }
-        .opacity(entry.include || !usable ? 1 : 0.55)
+        .onChange(of: columns) { _, c in
+            if let d = try? JSONEncoder().encode(c) { UserDefaults.standard.set(d, forKey: "mergeTableColumns") }
+        }
+    }
+
+    private func dim(_ entry: Entry, _ plans: [UUID: Plan]) -> Bool {
+        !entry.include && plans[entry.id]?.span != nil
     }
 
     private func tcField(_ value: Binding<Int>, edited: Bool, reset: @escaping () -> Void, fps: Int) -> some View {
         HStack(spacing: 2) {
             TextField("", value: value, format: TimecodeFormat(fps: fps))
                 .monospacedDigit()
-                .frame(width: 96)
+                .frame(minWidth: 86)
                 .help("HH:MM:SS:FF – eine einzelne Zahl steht für die volle Stunde")
             Button(action: reset) { Image(systemName: "arrow.uturn.backward") }
                 .buttonStyle(.borderless)
@@ -181,6 +229,11 @@ struct MergeView: View {
                 .opacity(edited ? 1 : 0)
                 .disabled(!edited)
         }
+    }
+
+    private func reset() {
+        entries = model.sheets.map { Entry(id: $0.id, include: true) }
+        name = "Gesamt"
     }
 
     private func move(_ index: Int, _ delta: Int) {

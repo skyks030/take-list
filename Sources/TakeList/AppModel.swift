@@ -53,15 +53,15 @@ enum SidebarFilter: String, CaseIterable, Identifiable {
 final class AppModel {
     static let shared = AppModel()
 
-    var sheets: [TakeSheet] = [] { didSet { version += 1 } }
+    var sheets: [TakeSheet] = [] { didSet { version += 1; scheduleSave() } }
     var proposals: [SplitProposal] = [] { didSet { version += 1 } }
     private(set) var version = 0
-    var sources: [URL: Data] = [:]
-    var selectedSheetID: UUID?
+    var sources: [URL: Data] = [:] { didSet { scheduleSave() } }
+    var selectedSheetID: UUID? { didSet { if oldValue != selectedSheetID { scheduleSave() } } }
     var integrityIssues: [Issue] = []
     var splitIssues: [Issue] = []
-    var dismissedIssueKeys: Set<String> = []
-    var dirtyFiles: Set<URL> = []
+    var dismissedIssueKeys: Set<String> = [] { didSet { scheduleSave() } }
+    var dirtyFiles: Set<URL> = [] { didSet { scheduleSave() } }
     var settings: ScanSettings {
         didSet {
             saveSettings()
@@ -93,6 +93,9 @@ final class AppModel {
     var infoMessage: String?
     @ObservationIgnored var undoManager: UndoManager?
     @ObservationIgnored private var refCycle: [UUID: Int] = [:]
+    @ObservationIgnored private var sourceNames: [URL: String] = [:]
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var restoring = false
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "scanSettings"),
@@ -109,6 +112,53 @@ final class AppModel {
         }
         if let raw = UserDefaults.standard.string(forKey: "sidebarFilter"), let f = SidebarFilter(rawValue: raw) {
             sidebarFilter = f
+        }
+        restoreSession()
+    }
+
+    // MARK: Session
+
+    /// Reopens the tables of the last session (stored in Application Support, not the original files).
+    private func restoreSession() {
+        guard let (snap, data) = SessionStore.shared.load(), !snap.sheets.isEmpty else { return }
+        restoring = true
+        defer { restoring = false }
+        sourceNames = snap.sources
+        sources = data
+        sheets = snap.sheets
+        dirtyFiles = Set(snap.dirtyFiles).intersection(data.keys)
+        dismissedIssueKeys = Set(snap.dismissedIssueKeys)
+        selectedSheetID = snap.selectedSheetID.flatMap { id in sheets.contains { $0.id == id } ? id : nil } ?? sheets.first?.id
+        runIntegrity()
+        infoMessage = "\(sheets.count) Tabelle\(sheets.count == 1 ? "" : "n") aus der letzten Sitzung wiederhergestellt."
+    }
+
+    private func scheduleSave() {
+        guard !restoring else { return }
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            self?.saveSession()
+        }
+    }
+
+    func saveSession() {
+        saveTask?.cancel()
+        saveTask = nil
+        let used = Set(sheets.map(\.fileURL))
+        var names: [URL: String] = [:]
+        for url in used where sources[url] != nil {
+            names[url] = sourceNames[url] ?? (UUID().uuidString + ".xlsx")
+        }
+        sourceNames = names
+        let snap = SessionStore.Snapshot(sheets: sheets.filter { names[$0.fileURL] != nil }, sources: names,
+                                         dirtyFiles: Array(dirtyFiles.intersection(used)), selectedSheetID: selectedSheetID,
+                                         dismissedIssueKeys: Array(dismissedIssueKeys))
+        do {
+            try SessionStore.shared.save(snap, data: sources)
+        } catch {
+            NSLog("Take-Liste: Sitzung konnte nicht gesichert werden: \(error)")
         }
     }
 
@@ -720,14 +770,5 @@ final class AppModel {
         }
         infoMessage = "\(total) Marker in \(dests.count) Datei\(dests.count == 1 ? "" : "en") exportiert"
             + (skipped > 0 ? " – \(skipped) Takes ohne TC In übersprungen." : ".")
-    }
-
-    func confirmDiscard(title: String = "Nicht exportierte Änderungen verwerfen?", button: String = "Verwerfen und beenden") -> Bool {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = "Einige Tabellen wurden geändert, aber noch nicht als Excel-Datei exportiert."
-        alert.addButton(withTitle: button)
-        alert.addButton(withTitle: "Abbrechen")
-        return alert.runModal() == .alertFirstButtonReturn
     }
 }

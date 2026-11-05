@@ -1,12 +1,13 @@
 # Take-Liste
 
-macOS-App (ab macOS 14) zum Prüfen, Aufteilen und Zusammenführen von Synchron-Takelisten (.xlsx).
+macOS-App (ab macOS 14) zum Prüfen, Aufteilen und Zusammenführen von Synchron-Takelisten (.xlsx) und CSV.
 
 - Takes nach Wortzahl oder Dauer an Satzgrenzen aufteilen, Timecodes proportional verteilen
 - Integritätsprüfung: fehlende Rollen/Timecodes, Überschneidungen, Schreibvarianten, Sonderzeichen
 - **Listen zusammenführen** (⇧⌘M): mehrere offene Tabellen mit eigenem Basis- und Start-Timecode zu einer Gesamtliste vereinen – die Abstände der Takes bleiben exakt gleich
 - Export als Excel, Nuendo-/Cubase-Marker-CSV oder Resolve-Marker-EDL
 - Einstellungen bleiben gespeichert, auch über Updates hinweg
+- Offene Tabellen samt Bearbeitungen werden automatisch gesichert (`~/Library/Application Support/Take-Liste/Session`) und beim nächsten Start wieder geöffnet – unabhängig von den Originaldateien
 
 ## Installation
 

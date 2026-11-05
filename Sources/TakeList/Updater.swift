@@ -80,7 +80,7 @@ final class Updater {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Take-Liste \(version) ist verfügbar"
-        var text = "Installiert ist Version \(Self.currentVersion). Die neue Version wird heruntergeladen, ersetzt die App an ihrem aktuellen Ort und startet danach neu. Deine Einstellungen bleiben erhalten."
+        var text = "Installiert ist Version \(Self.currentVersion). Die neue Version wird heruntergeladen, ersetzt die App an ihrem aktuellen Ort und startet danach neu. Deine Einstellungen und die geöffneten Tabellen bleiben erhalten."
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { text += "\n\n" + String(trimmed.prefix(800)) }
         alert.informativeText = text
@@ -89,9 +89,6 @@ final class Updater {
         alert.addButton(withTitle: "Diese Version überspringen")
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            // The app quits for the update: unexported changes would be lost.
-            if AppModel.shared.isDirty, !AppModel.shared.confirmDiscard(title: "Update installieren und Änderungen verwerfen?",
-                                                                        button: "Verwerfen und aktualisieren") { return }
             install(asset: asset, version: version)
         case .alertThirdButtonReturn:
             skippedVersion = version
@@ -205,7 +202,6 @@ final class Updater {
             task.waitUntilExit()
             guard task.terminationStatus == 0 else { throw Self.error(4, "Administrator-Berechtigung wurde nicht erteilt.") }
         }
-        AppDelegate.skipTerminationPrompt = true
         DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 

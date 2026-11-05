@@ -1,6 +1,6 @@
 import Foundation
 
-public enum CellValue: Equatable, Hashable {
+public enum CellValue: Equatable, Hashable, Codable {
     case empty
     case string(String)
     case number(Double)
@@ -22,7 +22,7 @@ public enum CellValue: Equatable, Hashable {
     public var isBlank: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }
 
-public struct Cell: Equatable, Hashable {
+public struct Cell: Equatable, Hashable, Codable {
     public var value: CellValue
     /// Style index (`s` attribute) from the original workbook, kept for export.
     public var style: Int?
@@ -30,13 +30,13 @@ public struct Cell: Equatable, Hashable {
     public var text: String { value.text }
 }
 
-public struct XMLAttr: Equatable, Hashable {
+public struct XMLAttr: Equatable, Hashable, Codable {
     public var name: String
     public var value: String
     public init(_ name: String, _ value: String) { self.name = name; self.value = value }
 }
 
-public struct SheetRow: Identifiable, Equatable {
+public struct SheetRow: Identifiable, Equatable, Codable {
     public var id = UUID()
     /// 1-based row number in the source sheet (nil for rows created by the app).
     public var sourceRow: Int?
@@ -96,7 +96,7 @@ public struct ColumnMapping: Equatable, Codable {
 }
 
 /// One imported worksheet.
-public struct TakeSheet: Identifiable, Equatable {
+public struct TakeSheet: Identifiable, Equatable, Codable {
     public var id = UUID()
     public var fileURL: URL
     public var sheetName: String
@@ -175,4 +175,53 @@ public func columnIndex(letters: Substring) -> Int {
     var n = 0
     for ch in letters.uppercased().unicodeScalars { n = n * 26 + Int(ch.value) - 64 }
     return n - 1
+}
+
+// MARK: - Compact encoding (used for the saved session)
+
+extension CellValue {
+    private struct ErrorBox: Codable { var e: String }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .empty }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let d = try? c.decode(Double.self) { self = .number(d) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else { self = .error(try c.decode(ErrorBox.self).e) }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .empty: try c.encodeNil()
+        case .string(let s): try c.encode(s)
+        case .number(let d): try c.encode(d)
+        case .bool(let b): try c.encode(b)
+        case .error(let e): try c.encode(ErrorBox(e: e))
+        }
+    }
+}
+
+extension Cell {
+    private enum Keys: String, CodingKey { case v, s }
+
+    /// A cell without style is stored as its bare value, otherwise as `{"v": …, "s": style}`.
+    public init(from decoder: Decoder) throws {
+        if let k = try? decoder.container(keyedBy: Keys.self), k.contains(.s) {
+            self.init((try? k.decode(CellValue.self, forKey: .v)) ?? .empty, style: try k.decodeIfPresent(Int.self, forKey: .s))
+        } else {
+            self.init(try CellValue(from: decoder))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        if let style {
+            var k = encoder.container(keyedBy: Keys.self)
+            try k.encode(value, forKey: .v)
+            try k.encode(style, forKey: .s)
+        } else {
+            try value.encode(to: encoder)
+        }
+    }
 }
