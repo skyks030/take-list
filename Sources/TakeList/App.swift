@@ -40,7 +40,7 @@ struct TakeListApp: App {
                 Button("Nach Updates suchen …") { Updater.shared.check(userInitiated: true) }
             }
             CommandGroup(replacing: .newItem) {
-                Button("Excel-Tabelle importieren …") { model.showImportPanel() }
+                Button("Takeliste importieren (Excel / CSV) …") { model.showImportPanel() }
                     .keyboardShortcut("o")
             }
             CommandGroup(replacing: .saveItem) {

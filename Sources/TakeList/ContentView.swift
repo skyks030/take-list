@@ -37,7 +37,7 @@ struct ContentView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 if !model.sheets.isEmpty {
                     Button { model.showImportPanel() } label: { Label("Importieren", systemImage: "square.and.arrow.down") }
-                        .help("Weitere Excel-Tabelle importieren (⌘O)")
+                        .help("Weitere Takeliste (Excel oder CSV) importieren (⌘O)")
                     Button { model.scan() } label: { Label("Scannen", systemImage: "text.magnifyingglass") }
                         .help("Alle Tabellen scannen (⌘R)")
                     Button { model.showMerge = true } label: { Label("Zusammenführen", systemImage: "arrow.triangle.merge") }
@@ -140,9 +140,9 @@ struct EmptyStateView: View {
                 .foregroundStyle(.secondary)
             Text("Keine Takeliste geöffnet")
                 .font(.title2.weight(.semibold))
-            Text("Excel-Datei (.xlsx) importieren oder hierher ziehen.")
+            Text("Excel-Datei (.xlsx) oder CSV importieren oder hierher ziehen.")
                 .foregroundStyle(.secondary)
-            Button("Excel-Tabelle importieren …") { model.showImportPanel() }
+            Button("Takeliste importieren …") { model.showImportPanel() }
                 .accessibilityIdentifier("import-center")
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)

@@ -165,9 +165,9 @@ final class AppModel {
 
     func showImportPanel() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = ["xlsx", "xlsm"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = (["xlsx", "xlsm"] + CSVReader.fileExtensions).compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
-        panel.message = "Excel-Takelisten (.xlsx) auswählen"
+        panel.message = "Takelisten als Excel (.xlsx) oder CSV auswählen"
         panel.prompt = "Importieren"
         guard panel.runModal() == .OK else { return }
         importFiles(panel.urls)
@@ -186,12 +186,18 @@ final class AppModel {
 
     func importFiles(_ urls: [URL]) {
         for url in urls where !pendingFiles.contains(where: { $0.url == url }) {
-            guard ["xlsx", "xlsm"].contains(url.pathExtension.lowercased()) else {
-                errorMessage = "„\(url.lastPathComponent)“ ist keine .xlsx-Datei. Bitte alte .xls-Dateien in Excel als .xlsx sichern."
+            let ext = url.pathExtension.lowercased()
+            let isCSV = CSVReader.fileExtensions.contains(ext)
+            guard ["xlsx", "xlsm"].contains(ext) || isCSV else {
+                errorMessage = "„\(url.lastPathComponent)“ ist weder eine .xlsx- noch eine CSV-Datei. Bitte alte .xls-Dateien in Excel als .xlsx sichern."
                 continue
             }
             do {
-                let data = try sources[url] ?? Data(contentsOf: url)
+                // CSV files are turned into a one-sheet workbook; exports are then written as .xlsx.
+                let data = try sources[url] ?? {
+                    let raw = try Data(contentsOf: url)
+                    return isCSV ? CSVReader.xlsxPackage(raw, sheetName: url.deletingPathExtension().lastPathComponent) : raw
+                }()
                 let wb = try Workbook(url: url, data: data)
                 guard !wb.sheets.isEmpty else { errorMessage = "„\(url.lastPathComponent)“ enthält keine Tabellenblätter."; continue }
                 let already = Set(sheets.filter { $0.fileURL == url }.map(\.sheetPath))
@@ -205,6 +211,8 @@ final class AppModel {
                 // Preselect every sheet with content (header + at least one row) that isn't open yet.
                 let selection = Set(wb.sheets.map(\.path).filter { !already.contains($0) && (stats[$0]?.rows ?? 0) >= 2 })
                 pendingFiles.append(PendingFile(url: url, workbook: wb, data: data, selection: selection, stats: stats))
+                // A CSV has exactly one sheet: go straight to the column mapping.
+                if isCSV, let file = pendingFiles.last, !file.selection.isEmpty { confirmSheetSelection(file) }
             } catch {
                 errorMessage = "„\(url.lastPathComponent)“ konnte nicht gelesen werden: \(error.localizedDescription)"
             }
